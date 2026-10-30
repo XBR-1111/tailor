@@ -9,7 +9,7 @@ runner = CliRunner()
 
 
 def test_version_exports() -> None:
-    assert tailor.__version__ == "0.0.1"
+    assert tailor.__version__ == "0.1.0"
 
 
 def test_cli_version() -> None:

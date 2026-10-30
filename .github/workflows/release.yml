@@ -1,0 +1,20 @@
+name: Release
+
+# Trusted Publishing: no PyPI token stored anywhere. Requires a one-time
+# PyPI-side setup: pypi.org -> account -> Publishing -> add publisher
+# (project "tailor", owner XBR-1111, workflow release.yml, environment pypi).
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1

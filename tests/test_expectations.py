@@ -14,10 +14,11 @@ REPO = Path(__file__).resolve().parent.parent
 MAKE_FIXTURE = REPO / "scripts" / "make_fixture.py"
 
 
-def make_fixture(tmp_path: Path, corrupt: str | None = None) -> Path:
-    out = tmp_path / f"ds_{corrupt or 'clean'}"
+def make_fixture(tmp_path: Path, corrupt: str | None = None, fmt: str = "v2.1") -> Path:
+    out = tmp_path / f"ds_{fmt}_{corrupt or 'clean'}"
     subprocess.run(
-        [sys.executable, str(MAKE_FIXTURE), str(out)] + (["--corrupt", corrupt] if corrupt else []),
+        [sys.executable, str(MAKE_FIXTURE), str(out), "--format", fmt]
+        + (["--corrupt", corrupt] if corrupt else []),
         check=True,
         capture_output=True,
     )
@@ -83,6 +84,12 @@ def test_cli_check_exit_codes(tmp_path: Path) -> None:
     assert '"verdict": "rejected"' in json_out.stdout
 
 
+@pytest.mark.parametrize("fmt", ["v2.1", "v3.0"])
+def test_clean_fixture_is_accepted_both_formats(tmp_path: Path, fmt: str) -> None:
+    st = statuses(make_fixture(tmp_path, fmt=fmt))
+    assert all(s == Status.PASS for s in st.values()), st
+
+
 @pytest.mark.parametrize(
     "corrupt,expect_name",
     [
@@ -90,9 +97,13 @@ def test_cli_check_exit_codes(tmp_path: Path) -> None:
         ("missing-file", "episode_files"),
         ("frame-mismatch", "total_frames"),
         ("bad-version", "codebase_version"),
+        ("short-episode", "episode_lengths"),
         ("dup-timestamp", "timestamps"),
     ],
 )
-def test_every_corruption_has_a_catcher(tmp_path: Path, corrupt: str, expect_name: str) -> None:
-    st = statuses(make_fixture(tmp_path, corrupt))
+@pytest.mark.parametrize("fmt", ["v2.1", "v3.0"])
+def test_every_corruption_has_a_catcher(
+    tmp_path: Path, corrupt: str, expect_name: str, fmt: str
+) -> None:
+    st = statuses(make_fixture(tmp_path, corrupt, fmt=fmt))
     assert st[expect_name] in (Status.FAIL, Status.WARN)

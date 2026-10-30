@@ -30,6 +30,8 @@ CORRUPTIONS = (
     "stats-mismatch",  # stats.json action mean shifted by 0.5
     "missing-video",  # delete one video file (v2: ep1 / v3: the only shard)
     "video-mismatch",  # video shard short by 5 frames vs episode lengths
+    "zero-variance",  # state dim 0 frozen at a constant (dead sensor)
+    "schema-drop",  # v2 only: episode 1 parquet loses the observation.state column
 )
 
 
@@ -47,6 +49,8 @@ def _trajectory(rng: np.random.Generator, ep: int, corrupt: str | None) -> pd.Da
     action = state + 0.005 * rng.standard_normal((length, ACTION_DIM))
     if corrupt == "nan" and ep == 1:
         state[5, 2] = np.nan
+    if corrupt == "zero-variance" and ep == 0:
+        state[:, 0] = 0.5
     if corrupt == "frozen-action" and ep == 1:
         action[5:17] = action[5]
     if corrupt == "dup-timestamp" and ep == 0:
@@ -73,6 +77,8 @@ def make_v2(out: Path, corrupt: str | None) -> Path:
     for ep in range(N_EPISODES):
         df = _trajectory(rng, ep, corrupt)
         df["index"] = np.arange(total_frames, total_frames + EP_LENGTH)
+        if corrupt == "schema-drop" and ep == 1:
+            df = df.drop(columns=["observation.state"])
         df.to_parquet(out / "data" / "chunk-000" / f"episode_{ep:06d}.parquet", index=False)
         total_frames += EP_LENGTH
 
@@ -205,7 +211,8 @@ def _write_stats(out: Path, corrupt: str | None) -> None:
     for f in files:
         df = pd.read_parquet(f)
         for col in ("observation.state", "action"):
-            per_col.setdefault(col, []).extend(np.asarray(v, dtype=float) for v in df[col])
+            if col in df.columns:  # schema-drop corrupts by removing a column
+                per_col.setdefault(col, []).extend(np.asarray(v, dtype=float) for v in df[col])
     stats = {}
     for col, rows in per_col.items():
         arr = np.stack(rows)

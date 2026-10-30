@@ -44,9 +44,10 @@ tailor check /path/to/lerobot/dataset
 ACCEPTED  ·  11 passed, 0 warn, 0 failed
 ```
 
-Exit codes make it a CI gate: **0** accepted · **1** rejected · **2** unreadable.
-`--json` emits machine-readable output; `--max-episodes N` samples the first N
-episodes of huge datasets.
+Exit codes make it a CI gate: **0** accepted · **1** rejected · **2** unreadable
+(`--fail-on-warn` makes WARN exit 1 too). `--json` emits machine-readable output,
+`--markdown report.md` writes a PR/dataset-card friendly report, `--max-episodes N`
+samples the first N episodes of huge datasets.
 
 ## Configurable acceptance profiles
 
@@ -76,7 +77,7 @@ Any check can be remapped between WARN and FAIL. Unknown check names or keys
 in a profile fail fast with a clear error — a typo in your requirements must
 not silently keep a default you meant to change.
 
-## The 15 acceptance checks (v0.1)
+## The 17 acceptance checks (v0.1)
 
 | check | catches |
 | --- | --- |
@@ -95,6 +96,8 @@ not silently keep a default you meant to change.
 | action_quality | frozen (stuck) action runs; one action dim pegged at its declared range edge; sudden jumps beyond k·sigma |
 | video_files | declared video streams missing on disk (v2 per-episode files, v3 shard pointers) |
 | video_streams | undecodable video; frame count vs episode lengths; resolution vs declared shape |
+| zero_variance | dims that never move (std < eps): normalization would divide by zero |
+| schema_consistency | column sets/dtypes drifting across episodes |
 
 Validated on a real 921 MB distributed dataset (`lerobot/unitreeh1_fold_clothes`,
 38 episodes / 19k frames / stereo video) plus deterministic synthetic fixtures
@@ -114,8 +117,6 @@ v0.1 acceptance suite shipped. Roadmap, in priority order:
 
 **Accept depth (v0.2)** — close the check-category gap vs the ecosystem:
 
-- zero-variance features
-- cross-episode schema consistency (columns/dtype/shape drift)
 - dropped frames, frame/index continuity
 - action quality: clipped (pegged at min/max), frozen (stuck), sudden jumps
 - training readiness: policy window compatibility, zero-std dims, delta_timestamps

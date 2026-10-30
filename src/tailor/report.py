@@ -56,3 +56,24 @@ def _counts(results: list[CheckResult]) -> tuple[int, int, int]:
     warns = sum(r.status == Status.WARN for r in results)
     passes = sum(r.status == Status.PASS for r in results)
     return fails, warns, passes
+
+
+def render_markdown(results: list[CheckResult], dataset: str) -> str:
+    """PR/dataset-card friendly report."""
+    fails, warns, passes = _counts(results)
+    verdict = "REJECTED" if fails else ("ACCEPTED WITH WARNINGS" if warns else "ACCEPTED")
+    icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌", "SKIP": "➖"}
+    lines = [
+        "# tailor — acceptance report",
+        "",
+        f"**Dataset:** `{dataset}`",
+        "",
+        f"**Verdict:** {verdict} — {passes} passed, {warns} warn, {fails} failed",
+        "",
+        "| check | status | detail |",
+        "| --- | --- | --- |",
+    ]
+    for r in results:
+        detail = r.message.replace("|", r"\|")
+        lines.append(f"| `{r.name}` | {icon[r.status]} {r.status.value} | {detail} |")
+    return "\n".join(lines) + "\n"

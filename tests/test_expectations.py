@@ -35,7 +35,7 @@ def test_clean_fixture_is_accepted(tmp_path: Path) -> None:
     assert all(s == Status.PASS for s in st.values()), st
     snap = load_snapshot(make_fixture(tmp_path))
     results = run_all(snap)
-    assert len(results) == 15
+    assert len(results) == 17
 
 
 def test_nan_is_caught(tmp_path: Path) -> None:
@@ -103,6 +103,7 @@ def test_clean_fixture_is_accepted_both_formats(tmp_path: Path, fmt: str) -> Non
         ("stats-mismatch", "stats_recompute"),
         ("missing-video", "video_files"),
         ("video-mismatch", "video_streams"),
+        ("zero-variance", "zero_variance"),
     ],
 )
 @pytest.mark.parametrize("fmt", ["v2.1", "v3.0"])
@@ -111,3 +112,9 @@ def test_every_corruption_has_a_catcher(
 ) -> None:
     st = statuses(make_fixture(tmp_path, corrupt, fmt=fmt))
     assert st[expect_name] in (Status.FAIL, Status.WARN)
+
+
+def test_schema_drop_is_caught_v2(tmp_path: Path) -> None:
+    # schema corruption is v2-only in the fixture (v3 episodes share one shard)
+    st = statuses(make_fixture(tmp_path, "schema-drop", fmt="v2.1"))
+    assert st["schema_consistency"] == Status.FAIL

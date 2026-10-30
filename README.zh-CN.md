@@ -44,8 +44,9 @@ tailor check /path/to/lerobot/dataset
 ACCEPTED  ·  11 passed, 0 warn, 0 failed
 ```
 
-退出码让它可以直接当 CI 门禁用：**0** 收货 · **1** 拒收 · **2** 不可读。
-`--json` 输出机器可读结果；`--max-episodes N` 对大数据集只抽查前 N 个 episode。
+退出码让它可以直接当 CI 门禁用：**0** 收货 · **1** 拒收 · **2** 不可读（`--fail-on-warn`
+让 WARN 也以 1 退出）。`--json` 输出机器可读结果；`--markdown report.md` 写出可贴
+PR / dataset card 的报告；`--max-episodes N` 对大数据集只抽查前 N 个 episode。
 
 ## 可配置的验收 profile
 
@@ -74,7 +75,7 @@ tailor check /data/dataset --profile my_requirements.yaml
 任意检查项的 WARN/FAIL 可以互相重映射。profile 里出现未知的检查名或
 配置键会立刻报错——需求文件里的 typo 不能静默地保留一个你想改掉的默认值。
 
-## 15 条验收检查（v0.1）
+## 17 条验收检查（v0.1）
 
 | 检查项 | 抓什么问题 |
 | --- | --- |
@@ -93,6 +94,8 @@ tailor check /data/dataset --profile my_requirements.yaml
 | action_quality | frozen（连续相同 action）；某一 action 维持续钉在声明范围边界；超过 k·σ 的突变跳变 |
 | video_files | 声明的视频流在磁盘上缺失（v2 按每集文件、v3 按分片指针查） |
 | video_streams | 视频不可解码；帧数与 episode 长度不符；分辨率与声明 shape 不符 |
+| zero_variance | 永不变化的维度（std < eps）：归一化会除零 |
+| schema_consistency | 跨 episode 的列集/dtype 漂移 |
 
 已在一个真实的 921 MB 分发数据集（`lerobot/unitreeh1_fold_clothes`，38 episodes / 1.9 万帧 / 双目相机）上验证，配合注入坏数据的确定性合成 fixture——每种坏数据都被至少一条测试抓住，两种格式版本各验一遍。这个真实数据集自身带着两个被 tailor 首跑就抓到的问题：一个 action 维贴边界 29 帧（gripper 夹住叠好的衣服，WARN 级）；以及一处真实的元数据缺陷——`cam_left` 的 episode 分片指针全部指向 `file-000.mp4`，但它的 500 帧实际躺在无人引用的 `file-001.mp4` 里。已用官方读取器验证：`LeRobotDataset` 加载正常，但 episode 37 的所有帧都抛 `IndexError`（视频索引封顶 18500）——训练只要采到最后一个 episode 就崩。
 
@@ -102,8 +105,6 @@ v0.1 验收套件已交付。路线图按优先级排列：
 
 **验收纵深（v0.2）**——补齐对照生态的检查类目缺口：
 
-- 零方差特征
-- 跨 episode schema 一致性（列/dtype/shape 漂移）
 - 丢帧、frame/index 连续性
 - action 质量：clipped（钉在 min/max 边界）、frozen（连续不动）、突变跳变
 - 训练就绪度：policy window 兼容、zero-std 维度、delta_timestamps

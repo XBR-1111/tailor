@@ -31,6 +31,14 @@ def check(
         None, "--profile", "-p", help="YAML acceptance profile (per-check thresholds/severities)."
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    markdown: Path | None = typer.Option(
+        None,
+        "--markdown",
+        help="Also write a PR/dataset-card friendly Markdown report to this file.",
+    ),
+    fail_on_warn: bool = typer.Option(
+        False, "--fail-on-warn", help="Exit 1 on WARN findings too (strict CI gate)."
+    ),
     max_episodes: int | None = typer.Option(
         None, "--max-episodes", help="Only inspect the first N episodes (big datasets)."
     ),
@@ -64,8 +72,15 @@ def check(
         render_terminal(results, str(path))
         if profile is not None:
             console.print(f"[dim]profile: {profile}[/dim]")
+    if markdown is not None:
+        from tailor.report import render_markdown
+
+        markdown.write_text(render_markdown(results, str(path)))
+        console.print(f"[dim]markdown report: {markdown}[/dim]")
     fails = sum(r.status == "FAIL" for r in results)
-    raise typer.Exit(code=1 if fails else 0)
+    warns = sum(r.status == "WARN" for r in results)
+    exit_code = 1 if fails or (fail_on_warn and warns) else 0
+    raise typer.Exit(code=exit_code)
 
 
 if __name__ == "__main__":

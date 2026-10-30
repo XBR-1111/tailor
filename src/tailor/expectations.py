@@ -307,7 +307,12 @@ def check_stats_recompute(snap: DatasetSnapshot, cfg: dict | None = None) -> Che
         import numpy as np
 
         values = np.stack(
-            [np.asarray(v, dtype=float) for df in snap.frames.values() for v in df[col]]
+            [
+                np.asarray(v, dtype=float)
+                for df in snap.frames.values()
+                if col in df.columns
+                for v in df[col]
+            ]
         )
         for stat, actual in (
             ("mean", values.mean(axis=0)),
@@ -506,6 +511,61 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     return _ok("video_streams", f"{len(keys)} stream(s) probed")
 
 
+def check_zero_variance(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if not snap.frames:
+        return _skip("zero_variance", "no readable frames")
+    eps = cfg.get("eps", 1e-6)
+    flat = []
+    for idx, df in sorted(snap.frames.items()):
+        for col in ("observation.state", "action"):
+            if col not in df.columns:
+                continue
+            import numpy as np
+
+            arr = np.stack([np.asarray(v, dtype=float) for v in df[col]])
+            dead = np.where(arr.std(axis=0) < eps)[0].tolist()
+            if dead:
+                for dim in dead:
+                    flat.append((idx, col, dim))
+    if flat:
+        return _warn(
+            "zero_variance",
+            f"{len(flat)} dim(s) never move (std < {eps:g}): normalization would divide by zero",
+            dims=flat[:10],
+        )
+    return _ok("zero_variance")
+
+
+def check_schema_consistency(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if len(snap.frames) < 2:
+        return _skip("schema_consistency", "need >=2 readable episodes to compare")
+    problems = []
+    ref_idx = min(snap.frames)
+    ref = snap.frames[ref_idx]
+    ref_cols = list(ref.columns)
+    ref_dtypes = {c: str(ref[c].dtype) for c in ref.columns}
+    for idx, df in sorted(snap.frames.items()):
+        if idx == ref_idx:
+            continue
+        if list(df.columns) != ref_cols:
+            missing = [c for c in ref_cols if c not in df.columns]
+            extra = [c for c in df.columns if c not in ref_cols]
+            problems.append((idx, "columns", f"missing={missing[:3]} extra={extra[:3]}"))
+            continue
+        for col, ref_dt in ref_dtypes.items():
+            if str(df[col].dtype) != ref_dt:
+                problems.append((idx, col, f"{df[col].dtype} vs {ref_dt} in ep {ref_idx}"))
+    if problems:
+        return _fail(
+            "schema_consistency",
+            f"{len(problems)} schema drift(s) across episodes",
+            problems=problems[:10],
+        )
+    return _ok("schema_consistency")
+
+
 # Registry order is the report order.
 EXPECTATIONS: dict[str, Expectation] = {
     f.__name__.removeprefix("check_"): f
@@ -525,6 +585,8 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_action_quality,
         check_video_files,
         check_video_streams,
+        check_zero_variance,
+        check_schema_consistency,
     )
 }
 

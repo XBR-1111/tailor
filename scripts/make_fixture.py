@@ -28,6 +28,8 @@ CORRUPTIONS = (
     "dup-timestamp",  # episode 0 timestamps all zero (non-monotonic)
     "frozen-action",  # episode 1: 12 consecutive identical actions
     "stats-mismatch",  # stats.json action mean shifted by 0.5
+    "missing-video",  # delete one video file (v2: ep1 / v3: the only shard)
+    "video-mismatch",  # video shard short by 5 frames vs episode lengths
 )
 
 
@@ -89,6 +91,8 @@ def make_v2(out: Path, corrupt: str | None) -> Path:
 
     if corrupt == "missing-file":
         (out / "data" / "chunk-000" / "episode_000001.parquet").unlink()
+    _write_videos(out, "v2.1", corrupt)
+    _write_videos(out, "v3.0", corrupt)
     _write_stats(out, corrupt)
     return out
 
@@ -110,6 +114,7 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
         # short-episode corrupts only the declared length, never the rows —
         # the mismatch stays inside metadata as in real broken datasets
         length = 1 if (corrupt == "short-episode" and ep == 2) else EP_LENGTH
+        t0, t1 = total_frames / FPS, (total_frames + EP_LENGTH) / FPS
         episodes_meta.append(
             {
                 "episode_index": ep,
@@ -117,6 +122,10 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
                 "data/file_index": 0,
                 "dataset_from_index": total_frames,
                 "dataset_to_index": total_frames + EP_LENGTH,
+                f"videos/{VIDEO_KEY}/chunk_index": 0,
+                f"videos/{VIDEO_KEY}/file_index": 0,
+                f"videos/{VIDEO_KEY}/from_timestamp": t0,
+                f"videos/{VIDEO_KEY}/to_timestamp": t1,
                 "tasks": ["pick up the cube"],
                 "length": length,
             }
@@ -135,8 +144,51 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
 
     if corrupt == "missing-file":
         (out / "data" / "chunk-000" / "file-000.parquet").unlink()
+    _write_videos(out, "v3.0", corrupt)
+    _write_videos(out, "v3.0", corrupt)
     _write_stats(out, corrupt)
     return out
+
+
+VIDEO_KEY = "observation.images.top"
+VIDEO_SIZE = 64
+
+
+def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
+    # zero frames are fine: existence, frame count and resolution are what
+    # the checks verify; nobody watches fixture videos for content
+    import av
+
+    vdir = out / "videos" / VIDEO_KEY / "chunk-000"
+    vdir.mkdir(parents=True, exist_ok=True)
+
+    def encode(path: Path, nframes: int) -> None:
+        container = av.open(str(path), mode="w")
+        stream = container.add_stream("libx264", rate=FPS)
+        stream.width = stream.height = VIDEO_SIZE
+        stream.pix_fmt = "yuv420p"
+        blank = av.VideoFrame.from_ndarray(
+            np.zeros((VIDEO_SIZE, VIDEO_SIZE, 3), dtype=np.uint8), format="rgb24"
+        )
+        for _ in range(nframes):
+            for packet in stream.encode(blank):
+                container.mux(packet)
+        for packet in stream.encode():  # flush
+            container.mux(packet)
+        container.close()
+
+    if fmt == "v2.1":
+        for ep in range(N_EPISODES):
+            short = 5 if (corrupt == "video-mismatch" and ep == 0) else 0
+            encode(vdir / f"episode_{ep:06d}.mp4", EP_LENGTH - short)
+        if corrupt == "missing-video":
+            (vdir / "episode_000001.mp4").unlink()
+    else:
+        # v3: all episodes share one shard, cut by from/to timestamps
+        short = 5 if corrupt == "video-mismatch" else 0
+        encode(vdir / "file-000.mp4", N_EPISODES * EP_LENGTH - short)
+        if corrupt == "missing-video":
+            (vdir / "file-000.mp4").unlink()
 
 
 def _write_stats(out: Path, corrupt: str | None) -> None:
@@ -189,6 +241,7 @@ def _write_info(meta: Path, fmt: str, corrupt: str | None, total_frames: int) ->
                 "features": {
                     "observation.state": {"dtype": "float32", "shape": [STATE_DIM]},
                     "action": {"dtype": "float32", "shape": [ACTION_DIM]},
+                    VIDEO_KEY: {"dtype": "video", "shape": [VIDEO_SIZE, VIDEO_SIZE, 3]},
                 },
             },
             indent=2,

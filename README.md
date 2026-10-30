@@ -76,7 +76,7 @@ Any check can be remapped between WARN and FAIL. Unknown check names or keys
 in a profile fail fast with a clear error — a typo in your requirements must
 not silently keep a default you meant to change.
 
-## The 13 acceptance checks (v0.1)
+## The 15 acceptance checks (v0.1)
 
 | check | catches |
 | --- | --- |
@@ -93,11 +93,18 @@ not silently keep a default you meant to change.
 | timestamps | non-monotonic timestamps; frame spacing deviating >10% from 1/fps |
 | stats_recompute | declared stats.json mean/std drifting from recomputed values |
 | action_quality | frozen (stuck) action runs; one action dim pegged at its declared range edge; sudden jumps beyond k·sigma |
+| video_files | declared video streams missing on disk (v2 per-episode files, v3 shard pointers) |
+| video_streams | undecodable video; frame count vs episode lengths; resolution vs declared shape |
 
 Validated on a real 921 MB distributed dataset (`lerobot/unitreeh1_fold_clothes`,
 38 episodes / 19k frames / stereo video) plus deterministic synthetic fixtures
 with injected corruptions — every corruption is caught by a test, on both
-format versions.
+format versions. The real dataset itself shipped two findings tailor caught
+on first contact: an action dim pegged at its range edge for 29 frames
+(gripper holding a folded shirt — WARN), and a genuine metadata defect where
+`cam_left`'s episode-to-shard pointers all target `file-000.mp4` while 500 of
+its frames actually live in an orphan `file-001.mp4` — training code that
+resolves frames via the pointers would read the wrong frames.
 
 ## Status
 
@@ -105,7 +112,6 @@ v0.1 acceptance suite shipped. Roadmap, in priority order:
 
 **Accept depth (v0.2)** — close the check-category gap vs the ecosystem:
 
-- video integrity: missing files, decode errors, frame count vs parquet, fps/resolution mismatch
 - zero-variance features
 - cross-episode schema consistency (columns/dtype/shape drift)
 - dropped frames, frame/index continuity

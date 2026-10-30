@@ -390,6 +390,122 @@ def check_action_quality(snap: DatasetSnapshot, cfg: dict | None = None) -> Chec
     return _ok("action_quality")
 
 
+def _video_keys(info: dict) -> list[str]:
+    return [key for key, feat in info.get("features", {}).items() if feat.get("dtype") == "video"]
+
+
+def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if snap.info is None or snap.episodes is None:
+        return _skip("video_files", "info.json or episode metadata unreadable")
+    keys = _video_keys(snap.info)
+    if not keys:
+        return _ok("video_files", "no video streams declared")
+    version = (snap.info or {}).get("codebase_version")
+    missing = set()
+    for ep in snap.episodes:
+        for key in keys:
+            if version == "v3.0":
+                c = ep.get(f"videos/{key}/chunk_index")
+                f = ep.get(f"videos/{key}/file_index")
+                if not isinstance(c, int) or not isinstance(f, int):
+                    missing.add(f"{key}: unresolved shard pointer")
+                    continue
+                path = snap.root / "videos" / key / f"chunk-{c:03d}" / f"file-{f:03d}.mp4"
+            else:
+                idx = ep.get("episode_index", -1)
+                path = (
+                    snap.root
+                    / "videos"
+                    / key
+                    / f"chunk-{idx // 1000:03d}"
+                    / f"episode_{idx:06d}.mp4"
+                )
+            if not path.is_file():
+                missing.add(f"{key}: {path.relative_to(snap.root)}")
+    if missing:
+        return _fail(
+            "video_files", f"{len(missing)} video file(s) missing", missing=sorted(missing)[:10]
+        )
+    return _ok("video_files", f"{len(keys)} stream(s)")
+
+
+def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if snap.info is None or snap.episodes is None:
+        return _skip("video_streams", "info.json or episode metadata unreadable")
+    keys = _video_keys(snap.info)
+    if not keys:
+        return _ok("video_streams", "no video streams declared")
+    try:
+        import av
+    except ImportError:
+        return _skip("video_streams", "PyAV not installed (pip install av)")
+    tolerance = cfg.get("frame_tolerance", 1)
+    version = (snap.info or {}).get("codebase_version")
+
+    def _probe(path):
+        container = av.open(str(path))
+        stream = container.streams.video[0]
+        frames = sum(1 for p in container.demux(video=0) if p.dts is not None)
+        w, h = stream.codec_context.width, stream.codec_context.height
+        container.close()
+        return frames, w, h
+
+    problems = []
+    for key in keys:
+        shape = snap.info["features"][key].get("shape", [])
+        if version == "v3.0":
+            # episodes share shards: expected frames = sum of lengths pointing
+            # at the same (chunk, file)
+            shards: dict[tuple, list] = {}
+            for ep in snap.episodes:
+                c, f = ep.get(f"videos/{key}/chunk_index"), ep.get(f"videos/{key}/file_index")
+                if isinstance(c, int) and isinstance(f, int):
+                    shards.setdefault((c, f), []).append(ep.get("length", 0))
+            for (c, f), lengths in shards.items():
+                path = snap.root / "videos" / key / f"chunk-{c:03d}" / f"file-{f:03d}.mp4"
+                if not path.is_file():
+                    continue  # already reported by video_files
+                try:
+                    frames, w, h = _probe(path)
+                except Exception:
+                    problems.append(f"{key}: {path.name} undecodable")
+                    continue
+                expected = sum(lengths)
+                if abs(frames - expected) > tolerance:
+                    problems.append(
+                        f"{key} {path.name}: {frames} frames vs {expected} episode frames"
+                    )
+                if len(shape) >= 2 and (h, w) != (shape[0], shape[1]):
+                    problems.append(f"{key} {path.name}: {w}x{h} vs declared {shape[1]}x{shape[0]}")
+        else:
+            for ep in snap.episodes:
+                idx = ep.get("episode_index", -1)
+                path = (
+                    snap.root
+                    / "videos"
+                    / key
+                    / f"chunk-{idx // 1000:03d}"
+                    / f"episode_{idx:06d}.mp4"
+                )
+                if not path.is_file():
+                    continue
+                try:
+                    frames, w, h = _probe(path)
+                except Exception:
+                    problems.append(f"{key}: episode {idx} video undecodable")
+                    continue
+                expected = ep.get("length", 0)
+                if abs(frames - expected) > tolerance:
+                    problems.append(f"{key} ep {idx}: {frames} frames vs episode length {expected}")
+                if len(shape) >= 2 and (h, w) != (shape[0], shape[1]):
+                    problems.append(f"{key} ep {idx}: {w}x{h} vs declared {shape[1]}x{shape[0]}")
+    if problems:
+        return _fail("video_streams", f"{len(problems)} stream problem(s)", problems=problems[:10])
+    return _ok("video_streams", f"{len(keys)} stream(s) probed")
+
+
 # Registry order is the report order.
 EXPECTATIONS: dict[str, Expectation] = {
     f.__name__.removeprefix("check_"): f
@@ -407,6 +523,8 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_timestamps,
         check_stats_recompute,
         check_action_quality,
+        check_video_files,
+        check_video_streams,
     )
 }
 

@@ -30,6 +30,7 @@ DEFAULTS: dict = {
     "episode_lengths": {"min": 2},
     "timestamps": {"spacing_tolerance": 0.1},
     "stats_recompute": {"mean_tolerance": 0.05},
+    "video_streams": {"frame_tolerance": 1},
     "action_quality": {
         "frozen_frames": 10,
         "clip_run": 5,

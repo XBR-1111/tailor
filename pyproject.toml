@@ -47,6 +47,8 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W"]
+# B008: typer/fastapi idiom — Argument()/Option() as parameter defaults is the documented pattern
+ignore = ["B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

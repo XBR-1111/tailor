@@ -103,8 +103,10 @@ format versions. The real dataset itself shipped two findings tailor caught
 on first contact: an action dim pegged at its range edge for 29 frames
 (gripper holding a folded shirt — WARN), and a genuine metadata defect where
 `cam_left`'s episode-to-shard pointers all target `file-000.mp4` while 500 of
-its frames actually live in an orphan `file-001.mp4` — training code that
-resolves frames via the pointers would read the wrong frames.
+its frames actually live in an orphan `file-001.mp4` — verified with the
+official reader: `LeRobotDataset` loads fine but every episode-37 frame
+raises `IndexError` (video index capped at 18500), so training crashes the
+moment a sampler touches the last episode.
 
 ## Status
 

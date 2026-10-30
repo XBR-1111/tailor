@@ -94,7 +94,7 @@ tailor check /data/dataset --profile my_requirements.yaml
 | video_files | 声明的视频流在磁盘上缺失（v2 按每集文件、v3 按分片指针查） |
 | video_streams | 视频不可解码；帧数与 episode 长度不符；分辨率与声明 shape 不符 |
 
-已在一个真实的 921 MB 分发数据集（`lerobot/unitreeh1_fold_clothes`，38 episodes / 1.9 万帧 / 双目相机）上验证，配合注入坏数据的确定性合成 fixture——每种坏数据都被至少一条测试抓住，两种格式版本各验一遍。这个真实数据集自身带着两个被 tailor 首跑就抓到的问题：一个 action 维贴边界 29 帧（gripper 夹住叠好的衣服，WARN 级）；以及一处真实的元数据缺陷——`cam_left` 的 episode 分片指针全部指向 `file-000.mp4`，但它的 500 帧实际躺在无人引用的 `file-001.mp4` 里，按指针解析帧的训练代码会读错帧。
+已在一个真实的 921 MB 分发数据集（`lerobot/unitreeh1_fold_clothes`，38 episodes / 1.9 万帧 / 双目相机）上验证，配合注入坏数据的确定性合成 fixture——每种坏数据都被至少一条测试抓住，两种格式版本各验一遍。这个真实数据集自身带着两个被 tailor 首跑就抓到的问题：一个 action 维贴边界 29 帧（gripper 夹住叠好的衣服，WARN 级）；以及一处真实的元数据缺陷——`cam_left` 的 episode 分片指针全部指向 `file-000.mp4`，但它的 500 帧实际躺在无人引用的 `file-001.mp4` 里。已用官方读取器验证：`LeRobotDataset` 加载正常，但 episode 37 的所有帧都抛 `IndexError`（视频索引封顶 18500）——训练只要采到最后一个 episode 就崩。
 
 ## 状态
 

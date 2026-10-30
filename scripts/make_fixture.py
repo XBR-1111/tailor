@@ -26,6 +26,8 @@ CORRUPTIONS = (
     "bad-version",  # codebase_version set to v9.9
     "short-episode",  # episode 2 declared length set to 1
     "dup-timestamp",  # episode 0 timestamps all zero (non-monotonic)
+    "frozen-action",  # episode 1: 12 consecutive identical actions
+    "stats-mismatch",  # stats.json action mean shifted by 0.5
 )
 
 
@@ -43,6 +45,8 @@ def _trajectory(rng: np.random.Generator, ep: int, corrupt: str | None) -> pd.Da
     action = state + 0.005 * rng.standard_normal((length, ACTION_DIM))
     if corrupt == "nan" and ep == 1:
         state[5, 2] = np.nan
+    if corrupt == "frozen-action" and ep == 1:
+        action[5:17] = action[5]
     if corrupt == "dup-timestamp" and ep == 0:
         t = np.zeros(length)
     return pd.DataFrame(
@@ -85,6 +89,7 @@ def make_v2(out: Path, corrupt: str | None) -> Path:
 
     if corrupt == "missing-file":
         (out / "data" / "chunk-000" / "episode_000001.parquet").unlink()
+    _write_stats(out, corrupt)
     return out
 
 
@@ -130,7 +135,37 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
 
     if corrupt == "missing-file":
         (out / "data" / "chunk-000" / "file-000.parquet").unlink()
+    _write_stats(out, corrupt)
     return out
+
+
+def _write_stats(out: Path, corrupt: str | None) -> None:
+    # stats computed from the actual generated frames; corrupt shifts the
+    # declared action mean so the recompute check has something to catch
+    import numpy as np
+
+    files = sorted(out.glob("data/chunk-*/episode_*.parquet")) or sorted(
+        out.glob("data/chunk-*/file-*.parquet")
+    )
+    # aggregate every file per column: per-file stats would drift from what
+    # the checker recomputes over all frames together
+    per_col: dict[str, list] = {}
+    for f in files:
+        df = pd.read_parquet(f)
+        for col in ("observation.state", "action"):
+            per_col.setdefault(col, []).extend(np.asarray(v, dtype=float) for v in df[col])
+    stats = {}
+    for col, rows in per_col.items():
+        arr = np.stack(rows)
+        stats[col] = {
+            "min": arr.min(axis=0).tolist(),
+            "max": arr.max(axis=0).tolist(),
+            "mean": arr.mean(axis=0).tolist(),
+            "std": arr.std(axis=0).tolist(),
+        }
+    if corrupt == "stats-mismatch":
+        stats["action"]["mean"] = [m + 0.5 for m in stats["action"]["mean"]]
+    (out / "meta" / "stats.json").write_text(json.dumps(stats, indent=2))
 
 
 def _write_info(meta: Path, fmt: str, corrupt: str | None, total_frames: int) -> None:

@@ -79,3 +79,16 @@ def test_invalid_severity_rejected(tmp_path: Path) -> None:
 def test_default_profile_shape() -> None:
     prof = default_profile()
     assert prof["timestamps"]["spacing_tolerance"] == 0.1
+    assert prof["action_quality"]["clip_run"] == 5
+
+
+def test_frozen_threshold_override(tmp_path: Path) -> None:
+    # fixture injects 11 consecutive identical actions (run of 11 diffs);
+    # raising the bar to 15 must silence the finding
+    ds = make_fixture(tmp_path / "x", corrupt="frozen-action")
+    snap = load_snapshot(ds)
+    strict = {"action_quality": {"frozen_frames": 15}}
+    results = {r.name: r for r in run_all(snap, strict)}
+    assert results["action_quality"].status == Status.PASS
+    default_results = {r.name: r for r in run_all(snap)}
+    assert default_results["action_quality"].status == Status.WARN

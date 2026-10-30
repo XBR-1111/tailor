@@ -278,6 +278,118 @@ def check_timestamps(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRes
     return _ok("timestamps")
 
 
+def _declared_stats(snap: DatasetSnapshot) -> dict | None:
+    """meta/stats.json if present (both v2.x and v3.0 keep it there)."""
+    import json
+
+    path = snap.root / "meta" / "stats.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+
+
+def check_stats_recompute(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if not snap.frames:
+        return _skip("stats_recompute", "no readable frames")
+    declared = _declared_stats(snap)
+    if declared is None:
+        return _skip("stats_recompute", "meta/stats.json missing (informational)")
+    mean_tol = cfg.get("mean_tolerance", 0.05)
+    drift_report = []
+    for col in ("observation.state", "action"):
+        stats = declared.get(col)
+        if not stats or col not in next(iter(snap.frames.values())).columns:
+            continue
+        import numpy as np
+
+        values = np.stack(
+            [np.asarray(v, dtype=float) for df in snap.frames.values() for v in df[col]]
+        )
+        for stat, actual in (
+            ("mean", values.mean(axis=0)),
+            ("std", values.std(axis=0)),
+        ):
+            decl = np.asarray(stats[stat], dtype=float)
+            scale = np.maximum(np.abs(decl), 1e-9)
+            drift = float((np.abs(decl - actual) / scale).max())
+            if drift > mean_tol:
+                drift_report.append((col, stat, round(drift, 4)))
+    if drift_report:
+        return _fail(
+            "stats_recompute",
+            f"declared stats drift beyond {mean_tol:.0%} of scale (recompute mismatch)",
+            drift=drift_report[:10],
+        )
+    return _ok("stats_recompute")
+
+
+def check_action_quality(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if not snap.frames:
+        return _skip("action_quality", "no readable frames")
+    frozen_frames = cfg.get("frozen_frames", 10)
+    clip_run = cfg.get("clip_run", 5)
+    jump_sigma = cfg.get("jump_sigma", 8)
+    jump_ratio_max = cfg.get("jump_ratio", 0.01)
+
+    import numpy as np
+
+    findings: dict[str, str] = {}
+    for idx, df in sorted(snap.frames.items()):
+        if "action" not in df.columns:
+            continue
+        actions = np.stack([np.asarray(v, dtype=float) for v in df["action"]])
+        if len(actions) < 2:
+            continue
+        # frozen: longest run of identical consecutive action vectors
+        same = (np.diff(actions, axis=0) == 0).all(axis=1)
+        longest = 0
+        run = 0
+        for flag in same:
+            run = run + 1 if flag else 0
+            longest = max(longest, run)
+        if longest >= frozen_frames:
+            findings.setdefault("frozen", f"episode {idx}: {longest} consecutive identical actions")
+        # clipped: saturation shows as one dim STAYING at the declared range
+        # edge, not as any single frame near it (smooth trajectories touch
+        # edges naturally). Longest per-dim run within 1% of the declared
+        # range (stats.json) must stay under clip_run frames. In-sample
+        # min/max would flag extreme frames by construction, so no declared
+        # stats means this sub-check is skipped.
+        declared = _declared_stats(snap)
+        action_stats = (declared or {}).get("action", {})
+        if "min" in action_stats and "max" in action_stats:
+            lo = np.asarray(action_stats["min"], dtype=float)
+            hi = np.asarray(action_stats["max"], dtype=float)
+            span = np.maximum(hi - lo, 1e-9)
+            at_edge = (actions <= lo + 0.01 * span) | (actions >= hi - 0.01 * span)
+            for dim in range(at_edge.shape[1]):
+                run = best = 0
+                for flag in at_edge[:, dim]:
+                    run = run + 1 if flag else 0
+                    best = max(best, run)
+                if best >= clip_run:
+                    findings.setdefault(
+                        "clipped",
+                        f"episode {idx}: action dim {dim} pegged at range edge for {best} frames",
+                    )
+                    break
+        # jumps: fraction of frame-to-frame deltas beyond k sigma
+        deltas = np.abs(np.diff(actions, axis=0))
+        sigma = np.maximum(actions.std(axis=0), 1e-9)
+        if (deltas > jump_sigma * sigma).any(axis=1).mean() > jump_ratio_max:
+            findings.setdefault(
+                "jumps", f"episode {idx}: sudden action jumps beyond {jump_sigma} sigma"
+            )
+    if findings:
+        return _warn("action_quality", "; ".join(findings.values()), findings=list(findings))
+    return _ok("action_quality")
+
+
 # Registry order is the report order.
 EXPECTATIONS: dict[str, Expectation] = {
     f.__name__.removeprefix("check_"): f
@@ -293,6 +405,8 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_state_action_dims,
         check_nan_inf,
         check_timestamps,
+        check_stats_recompute,
+        check_action_quality,
     )
 }
 

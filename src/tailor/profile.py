@@ -29,6 +29,13 @@ DEFAULTS: dict = {
     "fps": {"allowed": None},  # None = any positive fps
     "episode_lengths": {"min": 2},
     "timestamps": {"spacing_tolerance": 0.1},
+    "stats_recompute": {"mean_tolerance": 0.05},
+    "action_quality": {
+        "frozen_frames": 10,
+        "clip_run": 5,
+        "jump_sigma": 8,
+        "jump_ratio": 0.01,
+    },
 }
 
 # severities a profile may remap; PASS is never remappable

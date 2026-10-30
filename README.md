@@ -76,7 +76,7 @@ Any check can be remapped between WARN and FAIL. Unknown check names or keys
 in a profile fail fast with a clear error — a typo in your requirements must
 not silently keep a default you meant to change.
 
-## The 11 acceptance checks (v0.1)
+## The 13 acceptance checks (v0.1)
 
 | check | catches |
 | --- | --- |
@@ -91,6 +91,8 @@ not silently keep a default you meant to change.
 | state_action_dims | state/action dims ≠ info.json features |
 | nan_inf | non-finite values in state/action |
 | timestamps | non-monotonic timestamps; frame spacing deviating >10% from 1/fps |
+| stats_recompute | declared stats.json mean/std drifting from recomputed values |
+| action_quality | frozen (stuck) action runs; one action dim pegged at its declared range edge; sudden jumps beyond k·sigma |
 
 Validated on a real 921 MB distributed dataset (`lerobot/unitreeh1_fold_clothes`,
 38 episodes / 19k frames / stereo video) plus deterministic synthetic fixtures
@@ -104,7 +106,7 @@ v0.1 acceptance suite shipped. Roadmap, in priority order:
 **Accept depth (v0.2)** — close the check-category gap vs the ecosystem:
 
 - video integrity: missing files, decode errors, frame count vs parquet, fps/resolution mismatch
-- stats.json recompute drift, zero-variance features
+- zero-variance features
 - cross-episode schema consistency (columns/dtype/shape drift)
 - dropped frames, frame/index continuity
 - action quality: clipped (pegged at min/max), frozen (stuck), sudden jumps

@@ -35,7 +35,7 @@ def test_clean_fixture_is_accepted(tmp_path: Path) -> None:
     assert all(s == Status.PASS for s in st.values()), st
     snap = load_snapshot(make_fixture(tmp_path))
     results = run_all(snap)
-    assert len(results) == 11
+    assert len(results) == 13
 
 
 def test_nan_is_caught(tmp_path: Path) -> None:
@@ -99,6 +99,8 @@ def test_clean_fixture_is_accepted_both_formats(tmp_path: Path, fmt: str) -> Non
         ("bad-version", "codebase_version"),
         ("short-episode", "episode_lengths"),
         ("dup-timestamp", "timestamps"),
+        ("frozen-action", "action_quality"),
+        ("stats-mismatch", "stats_recompute"),
     ],
 )
 @pytest.mark.parametrize("fmt", ["v2.1", "v3.0"])

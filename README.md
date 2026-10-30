@@ -48,6 +48,34 @@ Exit codes make it a CI gate: **0** accepted · **1** rejected · **2** unreadab
 `--json` emits machine-readable output; `--max-episodes N` samples the first N
 episodes of huge datasets.
 
+## Configurable acceptance profiles
+
+What counts as acceptable differs per robot, task and training config. A
+profile (YAML in git — your dataset SLA, versioned and auditable) overrides
+per-check thresholds and severities; tailor is the engine that executes it:
+
+```yaml
+# my_requirements.yaml
+checks:
+  codebase_version:
+    allowed: [v2.1]     # this org only accepts v2.1
+  fps:
+    allowed: [30, 50]   # hardware reality
+  episode_lengths:
+    min: 100            # policy window needs headroom
+    severity: fail      # short episodes are a hard reject here
+  timestamps:
+    spacing_tolerance: 0.2
+```
+
+```bash
+tailor check /data/dataset --profile my_requirements.yaml
+```
+
+Any check can be remapped between WARN and FAIL. Unknown check names or keys
+in a profile fail fast with a clear error — a typo in your requirements must
+not silently keep a default you meant to change.
+
 ## The 11 acceptance checks (v0.1)
 
 | check | catches |

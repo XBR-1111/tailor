@@ -27,6 +27,9 @@ def version() -> None:
 @app.command()
 def check(
     path: Path = typer.Argument(..., help="Path to a LeRobot-format dataset directory."),
+    profile: Path | None = typer.Option(
+        None, "--profile", "-p", help="YAML acceptance profile (per-check thresholds/severities)."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
     max_episodes: int | None = typer.Option(
         None, "--max-episodes", help="Only inspect the first N episodes (big datasets)."
@@ -39,17 +42,28 @@ def check(
     if not path.is_dir():
         console.print(f"[red]not a directory:[/red] {path}")
         raise typer.Exit(code=2)
+    from tailor.profile import ProfileError, load_profile
+
+    prof = None
+    if profile is not None:
+        try:
+            prof = load_profile(profile)
+        except ProfileError as e:
+            console.print(f"[red]invalid profile:[/red] {e}")
+            raise typer.Exit(code=2) from e
     snap = load_snapshot(path, max_episodes=max_episodes)
     if not snap.readable:
         console.print(
             "[red]dataset unreadable:[/red] missing meta/info.json or meta/episodes.jsonl"
         )
         raise typer.Exit(code=2)
-    results = run_all(snap)
+    results = run_all(snap, profile=prof)
     if json_output:
         typer.echo(render_json(results, str(path)))
     else:
         render_terminal(results, str(path))
+        if profile is not None:
+            console.print(f"[dim]profile: {profile}[/dim]")
     fails = sum(r.status == "FAIL" for r in results)
     raise typer.Exit(code=1 if fails else 0)
 

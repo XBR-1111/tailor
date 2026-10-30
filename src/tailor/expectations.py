@@ -14,7 +14,7 @@ from collections.abc import Callable
 from tailor.loader import SUPPORTED_VERSIONS, _episode_parquet_path
 from tailor.model import CheckResult, DatasetSnapshot, Status
 
-Expectation = Callable[[DatasetSnapshot], CheckResult]
+Expectation = Callable[[DatasetSnapshot, dict], CheckResult]
 
 
 def _ok(name: str, message: str = "") -> CheckResult:
@@ -33,40 +33,48 @@ def _skip(name: str, message: str) -> CheckResult:
     return CheckResult(name, Status.SKIP, message)
 
 
-def check_info_json(snap: DatasetSnapshot) -> CheckResult:
+def check_info_json(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if snap.info is None:
         return _fail("info_json", "meta/info.json missing or not valid JSON")
     return _ok("info_json")
 
 
-def check_codebase_version(snap: DatasetSnapshot) -> CheckResult:
+def check_codebase_version(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if snap.info is None:
         return _skip("codebase_version", "info.json unreadable")
+    allowed = tuple(cfg.get("allowed", SUPPORTED_VERSIONS))
     version = snap.info.get("codebase_version")
     if version is None:
         return _fail("codebase_version", "codebase_version field missing")
-    if version not in SUPPORTED_VERSIONS:
+    if version not in allowed:
         return _fail(
             "codebase_version",
-            f"{version} not supported yet (supported: {', '.join(SUPPORTED_VERSIONS)}); "
+            f"{version} not allowed by this profile (allowed: {', '.join(allowed)}); "
             "v3.x is on the roadmap",
             version=version,
         )
     return _ok("codebase_version", version)
 
 
-def check_fps(snap: DatasetSnapshot) -> CheckResult:
+def check_fps(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if snap.info is None:
         return _skip("fps", "info.json unreadable")
     fps = snap.info.get("fps")
     if not isinstance(fps, (int, float)) or fps <= 0:
         return _fail("fps", f"fps must be a positive number, got {fps!r}")
+    allowed = cfg.get("allowed")
+    if allowed is not None and fps not in allowed:
+        return _fail("fps", f"fps={fps} outside allowed set {sorted(allowed)}")
     if fps < 1:
         return _warn("fps", f"unusual fps={fps} (<1)")
     return _ok("fps", str(fps))
 
 
-def check_episodes_metadata(snap: DatasetSnapshot) -> CheckResult:
+def check_episodes_metadata(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if snap.episodes is None:
         return _fail("episodes_metadata", "meta/episodes.jsonl missing or not valid JSONL")
     if len(snap.episodes) == 0:
@@ -74,7 +82,8 @@ def check_episodes_metadata(snap: DatasetSnapshot) -> CheckResult:
     return _ok("episodes_metadata", f"{len(snap.episodes)} episodes")
 
 
-def check_episode_files_exist(snap: DatasetSnapshot) -> CheckResult:
+def check_episode_files_exist(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if snap.episodes is None:
         return _skip("episode_files", "episode metadata unreadable")
     version = (snap.info or {}).get("codebase_version")
@@ -111,7 +120,8 @@ def check_episode_files_exist(snap: DatasetSnapshot) -> CheckResult:
     return _ok("episode_files")
 
 
-def check_total_frames(snap: DatasetSnapshot) -> CheckResult:
+def check_total_frames(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if snap.info is None or snap.episodes is None:
         return _skip("total_frames", "info.json or episodes.jsonl unreadable")
     declared = snap.info.get("total_frames")
@@ -126,23 +136,26 @@ def check_total_frames(snap: DatasetSnapshot) -> CheckResult:
     return _ok("total_frames", str(actual))
 
 
-def check_episode_lengths(snap: DatasetSnapshot) -> CheckResult:
+def check_episode_lengths(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if snap.episodes is None:
         return _skip("episode_lengths", "episodes.jsonl unreadable")
     bad = [ep.get("episode_index") for ep in snap.episodes if not ep.get("length", 0) > 0]
     if bad:
         return _fail("episode_lengths", f"{len(bad)} episode(s) with length<=0", bad=bad[:20])
-    short = [ep.get("episode_index") for ep in snap.episodes if 0 < ep.get("length", 0) < 2]
+    minimum = cfg.get("min", 2)
+    short = [ep.get("episode_index") for ep in snap.episodes if 0 < ep.get("length", 0) < minimum]
     if short:
         return _warn(
             "episode_lengths",
-            f"{len(short)} very short episode(s) (<2 frames) will break chunked sampling",
+            f"{len(short)} very short episode(s) (<{minimum} frames) will break chunked sampling",
             short=short[:20],
         )
     return _ok("episode_lengths")
 
 
-def check_task_indices(snap: DatasetSnapshot) -> CheckResult:
+def check_task_indices(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if snap.episodes is None or snap.tasks is None:
         return _skip("task_indices", "episodes.jsonl or tasks.jsonl unreadable")
     total_tasks = len(snap.tasks)
@@ -176,7 +189,8 @@ def _feature_dim(info: dict, name: str) -> int | None:
     return None
 
 
-def check_state_action_dims(snap: DatasetSnapshot) -> CheckResult:
+def check_state_action_dims(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if snap.info is None or not snap.frames:
         return _skip("state_action_dims", "no readable frames to compare against info.json")
     problems = []
@@ -199,7 +213,8 @@ def check_state_action_dims(snap: DatasetSnapshot) -> CheckResult:
     return _ok("state_action_dims")
 
 
-def check_nan_inf(snap: DatasetSnapshot) -> CheckResult:
+def check_nan_inf(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if not snap.frames:
         return _skip("nan_inf", "no readable frames")
     bad = []
@@ -229,13 +244,15 @@ def check_nan_inf(snap: DatasetSnapshot) -> CheckResult:
     return _ok("nan_inf")
 
 
-def check_timestamps(snap: DatasetSnapshot) -> CheckResult:
+def check_timestamps(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
     if snap.info is None or not snap.frames:
         return _skip("timestamps", "no readable frames or fps unknown")
     fps = snap.info.get("fps")
     if not isinstance(fps, (int, float)) or fps <= 0:
         return _skip("timestamps", "fps invalid, cannot check spacing")
     expected_dt = 1.0 / fps
+    tolerance = cfg.get("spacing_tolerance", 0.1)
     problems = []
     spacing_warns = []
     for idx, df in sorted(snap.frames.items()):
@@ -247,14 +264,15 @@ def check_timestamps(snap: DatasetSnapshot) -> CheckResult:
         if any(d <= 0 for d in diffs):
             problems.append((idx, "non-monotonic timestamps"))
             continue
-        if any(abs(d - expected_dt) > 0.1 * expected_dt for d in diffs):
+        if any(abs(d - expected_dt) > tolerance * expected_dt for d in diffs):
             spacing_warns.append(idx)
     if problems:
         return _fail("timestamps", "timestamp problems", problems=problems[:10])
     if spacing_warns:
         return _warn(
             "timestamps",
-            f"{len(spacing_warns)} episode(s) with frame spacing deviating >10% from 1/fps",
+            f"{len(spacing_warns)} episode(s) with frame spacing deviating"
+            f" >{tolerance:.0%} from 1/fps",
             episodes=spacing_warns[:10],
         )
     return _ok("timestamps")
@@ -279,5 +297,15 @@ EXPECTATIONS: dict[str, Expectation] = {
 }
 
 
-def run_all(snap: DatasetSnapshot) -> list[CheckResult]:
-    return [fn(snap) for fn in EXPECTATIONS.values()]
+def run_all(snap: DatasetSnapshot, profile: dict | None = None) -> list[CheckResult]:
+    """Run every expectation; profile remaps severities per check."""
+    profile = profile or {}
+    results = []
+    for name, fn in EXPECTATIONS.items():
+        cfg = profile.get(name, {})
+        r = fn(snap, cfg)
+        target = cfg.get("severity")
+        if target and r.status in (Status.WARN, Status.FAIL):
+            r = CheckResult(r.name, Status(target), r.message, r.details)
+        results.append(r)
+    return results

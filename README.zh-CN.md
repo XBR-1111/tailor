@@ -47,6 +47,33 @@ ACCEPTED  ·  11 passed, 0 warn, 0 failed
 退出码让它可以直接当 CI 门禁用：**0** 收货 · **1** 拒收 · **2** 不可读。
 `--json` 输出机器可读结果；`--max-episodes N` 对大数据集只抽查前 N 个 episode。
 
+## 可配置的验收 profile
+
+什么算合格，每个机器人、每个任务、每种训练配置都不一样。profile（YAML
+存进 git——就是你的数据 SLA，有版本历史、可审计）按检查项覆盖阈值与
+severity；tailor 是执行它的引擎：
+
+```yaml
+# my_requirements.yaml
+checks:
+  codebase_version:
+    allowed: [v2.1]     # 本组只收 v2.1
+  fps:
+    allowed: [30, 50]   # 硬件实际帧率
+  episode_lengths:
+    min: 100            # policy window 需要余量
+    severity: fail      # 短 episode 在这里是硬拒收
+  timestamps:
+    spacing_tolerance: 0.2
+```
+
+```bash
+tailor check /data/dataset --profile my_requirements.yaml
+```
+
+任意检查项的 WARN/FAIL 可以互相重映射。profile 里出现未知的检查名或
+配置键会立刻报错——需求文件里的 typo 不能静默地保留一个你想改掉的默认值。
+
 ## 11 条验收检查（v0.1）
 
 | 检查项 | 抓什么问题 |

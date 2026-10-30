@@ -19,6 +19,7 @@ classifiers = [
 ]
 dependencies = [
     "typer>=0.12",
+    "pyyaml>=6",
     "rich>=13",
     "pyarrow>=15",
     "pandas>=2",
@@ -29,6 +30,10 @@ Homepage = "https://github.com/XBR-1111/tailor"
 
 [project.scripts]
 tailor = "tailor.cli:app"
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
 
 # dev deps as a PEP 735 group (uv sync installs it), not an extra — pip -e ".[dev]" cannot see it
 [dependency-groups]

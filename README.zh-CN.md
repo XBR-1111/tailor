@@ -67,4 +67,25 @@ ACCEPTED  ·  11 passed, 0 warn, 0 failed
 
 ## 状态
 
-v0.1 验收套件已交付。路线图：filter/clean 命令、YAML 配方、视频完整性检查、PyPI 发布。计划见 Issues。
+v0.1 验收套件已交付。路线图按优先级排列：
+
+**验收纵深（v0.2）**——补齐对照生态的检查类目缺口：
+
+- 视频完整性：文件缺失、解码错误、帧数与 parquet 对齐、fps/分辨率不匹配
+- stats.json 重算漂移、零方差特征
+- 跨 episode schema 一致性（列/dtype/shape 漂移）
+- 丢帧、frame/index 连续性
+- action 质量：clipped（钉在 min/max 边界）、frozen（连续不动）、突变跳变
+- 训练就绪度：policy window 兼容、zero-std 维度、delta_timestamps
+- 可移植性：绝对路径、断掉的 symlink、HF Hub 兼容性
+- 重复 episode、train/eval split 泄漏
+- 按 HF repo id 远程验收（下载前先查元数据）、zip 归档支持
+- `--markdown` 报告（贴 PR / dataset card）、`--fail-on=warn`
+
+**流水线闭环（v0.3+）**——Cut/Sew/Re-check/Register：
+
+- `filter` / `clean` 命令构建在 lerobot 官方 `dataset_tools`（delete_episodes、compute_stats）之上，挂 `[lerobot]` extra——产物天然保持格式兼容；验收本体保持零重依赖
+- YAML 配方（跟随上游 `recipe.py` 的方向，不自造 schema）
+- 血缘台账 + 登记
+
+生态参照：lerobot-doctor（诊断，已进官方 dataset visualizer）、Calibra（episode 处置建议）。tailor 的车道是**验收门禁 + 可执行的流水线**——verdict + 退出码当 CI 门，然后是带血缘的确定性精炼，不做又一份报告。

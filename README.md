@@ -71,5 +71,25 @@ format versions.
 
 ## Status
 
-v0.1 acceptance suite shipped. Roadmap: filter/clean commands, YAML recipes,
-video integrity checks, PyPI release. Issues track the plan.
+v0.1 acceptance suite shipped. Roadmap, in priority order:
+
+**Accept depth (v0.2)** — close the check-category gap vs the ecosystem:
+
+- video integrity: missing files, decode errors, frame count vs parquet, fps/resolution mismatch
+- stats.json recompute drift, zero-variance features
+- cross-episode schema consistency (columns/dtype/shape drift)
+- dropped frames, frame/index continuity
+- action quality: clipped (pegged at min/max), frozen (stuck), sudden jumps
+- training readiness: policy window compatibility, zero-std dims, delta_timestamps
+- portability: absolute paths, broken symlinks, HF Hub compatibility
+- duplicate episodes, train/eval split leakage
+- remote acceptance from a HF repo id (check metadata before downloading), zip archives
+- `--markdown` report for PRs/dataset cards, `--fail-on=warn`
+
+**Pipeline closure (v0.3+)** — Cut/Sew/Re-check/Register:
+
+- `filter` / `clean` commands built on lerobot's official `dataset_tools` (delete_episodes, compute_stats) behind a `[lerobot]` extra — outputs stay format-compatible by construction; acceptance itself stays dependency-free
+- YAML recipes (tracking upstream `recipe.py` direction rather than inventing a schema)
+- provenance ledger + registration
+
+Reference points: lerobot-doctor (diagnostics, now in the official dataset visualizer), Calibra (episode disposition decisions). tailor's lane is the acceptance gate plus the executed pipeline — verdict + exit code as a CI door, then deterministic refinement with provenance, not another report.

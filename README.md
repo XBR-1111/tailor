@@ -2,6 +2,8 @@
 
 **Refine distributed robot datasets into training-ready data.**
 
+English | [简体中文](README.zh-CN.md)
+
 tailor is a data-refinement pipeline for robot learning datasets (LeRobot **v2.0 / v2.1 / v3.0**):
 
 - **Accept** — verify incoming distributed datasets: format-version compliance, metadata-vs-data consistency ("does the package match the label"), transfer integrity, dims and stats vs your training config

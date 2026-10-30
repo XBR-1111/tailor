@@ -1,8 +1,11 @@
-"""Defensive reader for LeRobot v2.x dataset metadata.
+"""Defensive reader for LeRobot v2.x and v3.0 dataset metadata.
 
 Any structural problem (missing file, bad JSON) leaves the corresponding field
-None so expectations report a clean FAIL instead of an exception. Parquet frames
-are read lazily per episode; a broken parquet marks that episode and moves on.
+None so expectations report a clean FAIL instead of an exception.
+
+v2.x and v3.0 differ on disk but are normalized here into one shape:
+episodes -> [{episode_index, length, task_index, ...}], tasks -> [{task_index}],
+frames -> {episode_index: DataFrame}. Expectations never branch on version.
 """
 
 import json
@@ -13,11 +16,11 @@ import pandas as pd
 
 from tailor.model import DatasetSnapshot
 
-SUPPORTED_VERSIONS = ("v2.0", "v2.1")
+SUPPORTED_VERSIONS = ("v2.0", "v2.1", "v3.0")
 
 
 def load_snapshot(root: Path, max_episodes: int | None = None) -> DatasetSnapshot:
-    """Read info.json / episodes.jsonl / tasks.jsonl and sample parquet frames."""
+    """Read metadata and sample per-episode frames for a LeRobot dataset."""
     snap = DatasetSnapshot(root=root)
     meta = root / "meta"
 
@@ -30,16 +33,35 @@ def load_snapshot(root: Path, max_episodes: int | None = None) -> DatasetSnapsho
     else:
         snap.info = None
 
-    snap.episodes = _read_jsonl(meta / "episodes.jsonl")
-    snap.tasks = _read_jsonl(meta / "tasks.jsonl")
+    version = (snap.info or {}).get("codebase_version")
+    if version == "v3.0":
+        snap.episodes = _load_v3_episodes(meta)
+        snap.tasks = _load_v3_tasks(meta)
+    else:
+        snap.episodes = _read_jsonl(meta / "episodes.jsonl")
+        snap.tasks = _read_jsonl(meta / "tasks.jsonl")
 
-    if snap.episodes is not None:
+    if snap.episodes:
         episodes = snap.episodes if max_episodes is None else snap.episodes[:max_episodes]
-        for ep in episodes:
-            idx = ep.get("episode_index")
-            df = _read_episode_frames(str(root), idx)
-            if df is not None:
-                snap.frames[idx] = df
+        if version == "v3.0":
+            # v3 frames live in shared chunk files; group once per file.
+            # v0.1 reads whole chunk files — fine at this scale; slicing via
+            # dataset_from_index is the follow-up for huge datasets.
+            seen = {ep.get("episode_index") for ep in episodes}
+            for f in sorted((root / "data").glob("chunk-*/file-*.parquet")):
+                try:
+                    df = pd.read_parquet(f)
+                except Exception:
+                    continue
+                for idx, g in df.groupby("episode_index"):
+                    if idx in seen and idx not in snap.frames:
+                        snap.frames[idx] = g
+        else:
+            for ep in episodes:
+                idx = ep.get("episode_index")
+                df = _read_v2_episode_frames(str(root), idx)
+                if df is not None:
+                    snap.frames[idx] = df
     return snap
 
 
@@ -57,14 +79,50 @@ def _read_jsonl(path: Path) -> list[dict] | None:
     return rows
 
 
+def _load_v3_episodes(meta: Path) -> list[dict] | None:
+    files = sorted(meta.glob("episodes/chunk-*/file-*.parquet"))
+    if not files:
+        return None
+    rows = []
+    try:
+        for f in files:
+            for r in pd.read_parquet(f).to_dict("records"):
+                tasks = r.get("tasks")
+                # v3 stores task TEXT per episode; only integer index lists
+                # yield a task_index — text lists leave None and the range
+                # check degrades to the total_tasks consistency check.
+                if hasattr(tasks, "tolist"):
+                    tasks = tasks.tolist()
+                r["task_index"] = (
+                    min(tasks)
+                    if isinstance(tasks, list) and tasks and all(isinstance(t, int) for t in tasks)
+                    else None
+                )
+                rows.append(r)
+    except Exception:
+        return None
+    rows.sort(key=lambda r: r.get("episode_index", -1))
+    return rows
+
+
+def _load_v3_tasks(meta: Path) -> list[dict] | None:
+    path = meta / "tasks.parquet"
+    if not path.is_file():
+        return None
+    try:
+        return pd.read_parquet(path).to_dict("records")
+    except Exception:
+        return None
+
+
 def _episode_parquet_path(root: Path, episode_index: int) -> Path:
     chunk = episode_index // 1000
     return root / "data" / f"chunk-{chunk:03d}" / f"episode_{episode_index:06d}.parquet"
 
 
 @lru_cache(maxsize=128)
-def _read_episode_frames(root_str: str, episode_index: int | None) -> pd.DataFrame | None:
-    """Read one episode's parquet; None means unreadable (corrupt or missing)."""
+def _read_v2_episode_frames(root_str: str, episode_index: int | None) -> pd.DataFrame | None:
+    """Read one v2 episode parquet; None means unreadable (corrupt or missing)."""
     if episode_index is None:
         return None
     path = _episode_parquet_path(Path(root_str), episode_index)

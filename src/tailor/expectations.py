@@ -76,7 +76,27 @@ def check_episodes_metadata(snap: DatasetSnapshot) -> CheckResult:
 
 def check_episode_files_exist(snap: DatasetSnapshot) -> CheckResult:
     if snap.episodes is None:
-        return _skip("episode_files", "episodes.jsonl unreadable")
+        return _skip("episode_files", "episode metadata unreadable")
+    version = (snap.info or {}).get("codebase_version")
+    if version == "v3.0":
+        # v3 stores episodes back-to-back in chunk/file shards; episode meta
+        # carries the shard pointer, so existence is checked per shard.
+        missing_shards = set()
+        for ep in snap.episodes:
+            c, f = ep.get("data/chunk_index"), ep.get("data/file_index")
+            if not isinstance(c, int) or not isinstance(f, int):
+                missing_shards.add("unresolved shard pointer")
+                continue
+            shard = snap.root / "data" / f"chunk-{c:03d}" / f"file-{f:03d}.parquet"
+            if not shard.is_file():
+                missing_shards.add(str(shard.relative_to(snap.root)))
+        if missing_shards:
+            return _fail(
+                "episode_files",
+                f"{len(missing_shards)} data shard(s) missing",
+                missing=sorted(missing_shards)[:20],
+            )
+        return _ok("episode_files")
     missing = [
         ep.get("episode_index")
         for ep in snap.episodes
@@ -128,7 +148,9 @@ def check_task_indices(snap: DatasetSnapshot) -> CheckResult:
     total_tasks = len(snap.tasks)
     declared = snap.info.get("total_tasks") if snap.info else None
     bad = [
-        ep.get("episode_index") for ep in snap.episodes if ep.get("task_index", 0) >= total_tasks
+        ep.get("episode_index")
+        for ep in snap.episodes
+        if (ti := ep.get("task_index")) is not None and ti >= total_tasks
     ]
     if bad:
         return _fail(
@@ -186,9 +208,16 @@ def check_nan_inf(snap: DatasetSnapshot) -> CheckResult:
             if col not in df.columns:
                 continue
             series = df[col].explode()
-            n_bad = int(
-                series.map(lambda v: not isinstance(v, float) or not math.isfinite(v)).sum()
-            )
+
+            # numpy scalars are not python float; coerce first so np.float32
+            # values are judged by value, not by type
+            def _finite(v) -> bool:
+                try:
+                    return math.isfinite(float(v))
+                except (TypeError, ValueError):
+                    return False
+
+            n_bad = int(series.map(lambda v: not _finite(v)).sum())
             if n_bad:
                 bad.append((idx, col, n_bad))
     if bad:

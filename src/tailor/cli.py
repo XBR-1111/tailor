@@ -8,6 +8,7 @@ from rich.console import Console
 
 from tailor import __version__
 from tailor.expectations import run_all
+from tailor.ledger import dataset_fingerprint
 from tailor.loader import load_snapshot
 from tailor.model import Status
 from tailor.report import render_json, render_terminal
@@ -190,6 +191,9 @@ def filter_(
     new_snap = load_snapshot(out)
     recheck = run_all(new_snap)
     render_terminal(recheck, str(out))
+    from tailor.ledger import append_event, event_for_filter
+
+    append_event(out, event_for_filter(path, snap, decision.drop, out))
     raise typer.Exit(code=0)
 
 
@@ -260,6 +264,11 @@ def clean(
         raise typer.Exit(code=0)
 
     report = apply_clean(snap, stats=do_stats, timestamps=do_ts)
+    from tailor.ledger import append_event, event_for_clean
+
+    ev = event_for_clean(report.stats_rewritten, len(report.timestamp_files), report.timestamp_rows)
+    ev["result_fingerprint"] = dataset_fingerprint(path)
+    append_event(path, ev)
     if report.backup_dir:
         console.print(f"[dim]backups: {report.backup_dir}[/dim]")
     if report.stats_rewritten:
@@ -274,6 +283,24 @@ def clean(
     recheck = run_all(new_snap)
     render_terminal(recheck, str(path))
     raise typer.Exit(code=0)
+
+
+@app.command()
+def provenance(path: Path = typer.Argument(..., help="Path to a dataset.")) -> None:
+    """Show the tailor ledger: every filter/clean this dataset's lineage records."""
+    from tailor.ledger import render_ledger
+
+    snap = load_snapshot(path)
+    if not snap.readable:
+        console.print("[red]dataset unreadable[/red]")
+        raise typer.Exit(code=2)
+    console.print(render_ledger(read_ledger_events(path)))
+
+
+def read_ledger_events(path: Path) -> list[dict]:
+    from tailor.ledger import read_ledger
+
+    return read_ledger(path)
 
 
 if __name__ == "__main__":

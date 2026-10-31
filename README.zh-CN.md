@@ -88,6 +88,21 @@ tailor clean /data/ds            # dry-run：只报告会改什么，不写盘
 tailor clean /data/ds --apply    # 修复 + 备份 + 自动 re-check
 ```
 
+## Register——血缘台账
+
+每次 `filter` 和 `clean --apply` 都会向数据集内的 `meta/tailor_ledger.jsonl`
+追加一条事件，**加工履历跟着数据走**：filter 在产物里写下出生记录（来源指纹、
+剔除了哪些 episode 及原因），clean 追加它重写了什么。
+
+```bash
+tailor provenance /data/ds_filtered
+# 2026-10-31T02:37:45+00:00  filter  from raw (b6b8be2337b9aae4, 38 eps) -> dropped 1: ep37 (explicit --drop-episodes)
+# 2026-10-31T02:37:47+00:00  clean   rewrote ['meta/stats.json']
+```
+
+`check` 永不写盘——验收是只读操作。指纹是结构级的（episode 元数据 + 数据文件
+大小），用于识别身份，不是密码学证明。
+
 ## 可配置的验收 profile
 
 什么算合格，每个机器人、每个任务、每种训练配置都不一样。profile（YAML
@@ -154,7 +169,7 @@ v0.1 验收套件已交付。路线图按优先级排列：
 
 - ~~`filter`~~ 已交付（见上）：显式 / 规则式 / 验收驱动剔除、去重，构建于官方 `delete_episodes`，自动 re-check
 - ~~`clean`~~ 已交付（见上）：stats 重算 + 时戳重建，先 dry-run
+- ~~血缘台账~~ 已交付（见上）：append-only，随数据集走
 - YAML 配方（跟随上游 `recipe.py` 的方向，不自造 schema）
-- 血缘台账 + 登记
 
 生态参照：lerobot-doctor（诊断，已进官方 dataset visualizer）、Calibra（episode 处置建议）。tailor 的车道是**验收门禁 + 可执行的流水线**——verdict + 退出码当 CI 门，然后是带血缘的确定性精炼，不做又一份报告。

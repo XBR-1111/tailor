@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-31
+
+### Added
+- Provenance ledger (the Register stage): filter writes a birth record into
+  the output dataset (source fingerprint, dropped episodes and reasons),
+  clean --apply appends what it rewrote; one JSON line per event in
+  meta/tailor_ledger.jsonl — the processing history travels with the data.
+- `tailor provenance <ds>` renders the timeline. check stays read-only.
+- Structural fingerprints (episode metadata + data file sizes) identify the
+  dataset across operations.
+
 ## [0.4.0] — 2026-10-31
 
 ### Added

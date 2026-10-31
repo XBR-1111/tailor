@@ -93,6 +93,22 @@ tailor clean /data/ds            # dry-run: what would change, nothing written
 tailor clean /data/ds --apply    # repair + backup + automatic re-check
 ```
 
+## Register — the provenance ledger
+
+Every `filter` and `clean --apply` appends one event to
+`meta/tailor_ledger.jsonl` **inside the dataset**, so the processing history
+travels with the data: filter writes a birth record into the output (source
+fingerprint, dropped episodes and why), clean appends what it rewrote.
+
+```bash
+tailor provenance /data/ds_filtered
+# 2026-10-31T02:37:45+00:00  filter  from raw (b6b8be2337b9aae4, 38 eps) -> dropped 1: ep37 (explicit --drop-episodes)
+# 2026-10-31T02:37:47+00:00  clean   rewrote ['meta/stats.json']
+```
+
+`check` never writes — acceptance is read-only. Fingerprints are structural
+(episode metadata + data file sizes), for identity not cryptographic proof.
+
 ## Configurable acceptance profiles
 
 What counts as acceptable differs per robot, task and training config. A
@@ -170,7 +186,7 @@ v0.1 acceptance suite shipped. Roadmap, in priority order:
 
 - ~~`filter`~~ shipped (see above): explicit / rule-based / check-driven drops, dedupe, on official `delete_episodes`, auto re-check
 - ~~`clean`~~ shipped (see above): stats recompute + timestamp rebuild, dry-run first
+- ~~provenance ledger~~ shipped (see above): append-only, travels with the dataset
 - YAML recipes (tracking upstream `recipe.py` direction rather than inventing a schema)
-- provenance ledger + registration
 
 Reference points: lerobot-doctor (diagnostics, now in the official dataset visualizer), Calibra (episode disposition decisions). tailor's lane is the acceptance gate plus the executed pipeline — verdict + exit code as a CI door, then deterministic refinement with provenance, not another report.

@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-31
+
+### Added
+- Remote acceptance: `tailor check org/name` pulls only `meta/*` from the
+  Hugging Face Hub (respects `HF_ENDPOINT`) and runs all metadata-level checks;
+  `--full` snapshots the whole repo for the complete run. File-presence checks
+  SKIP honestly in meta-only mode instead of faking a FAIL.
+- Zip support: `tailor check dataset.zip` extracts and peels wrapper
+  directories automatically.
+- huggingface-hub as a runtime dependency (light: requests/tqdm only).
+- Engineering hardening: mypy (clean) in dev + CI, py.typed + public API
+  exports, pytest-cov with a 75% floor (baseline 79%), CI matrix
+  ubuntu/macos × py3.12/3.13, CHANGELOG / CONTRIBUTING / PR template /
+  dependabot (actions), release workflow now also cuts a GitHub Release from
+  the changelog.
+
+## [0.2.0]
+
 ### Added
 - `clean` commands (timestamp rebuild, stats recompute) on official `compute_stats`
 - provenance ledger + registration

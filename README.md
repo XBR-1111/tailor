@@ -23,6 +23,9 @@ pip install tailor            # once published; until then:
 pip install git+https://github.com/XBR-1111/tailor
 
 tailor check /path/to/lerobot/dataset
+tailor check dataset.zip                # zip archive (wrapper dirs peeled)
+tailor check lerobot/unitreeh1_fold_clothes   # HF repo id: meta pre-check, no full download
+tailor check lerobot/... --full               # download everything, all 22 checks
 ```
 
 ```
@@ -43,6 +46,11 @@ tailor check /path/to/lerobot/dataset
 └───────────────────┴────────┴──────────────┘
 ACCEPTED  ·  11 passed, 0 warn, 0 failed
 ```
+
+Remote mode pulls only `meta/*` by default (seconds, a few MB) and runs every
+metadata-level check — file-presence checks SKIP honestly instead of faking a
+FAIL. `HF_ENDPOINT` is respected (mirrors work); downloads cache under
+`~/.cache/tailor-hf/`.
 
 Exit codes make it a CI gate: **0** accepted · **1** rejected · **2** unreadable
 (`--fail-on-warn` makes WARN exit 1 too). `--json` emits machine-readable output,
@@ -143,9 +151,7 @@ moment a sampler touches the last episode.
 
 v0.1 acceptance suite shipped. Roadmap, in priority order:
 
-**Accept depth (v0.2)** — remaining:
-
-- remote acceptance from a HF repo id (check metadata before downloading), zip archives
+**Accept depth (v0.2)** — complete.
 
 **Pipeline closure (v0.3+) — Cut/Sew/Re-check/Register:**
 

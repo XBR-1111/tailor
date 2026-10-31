@@ -23,6 +23,9 @@ pip install tailor            # 发布后可用；当前可先：
 pip install git+https://github.com/XBR-1111/tailor
 
 tailor check /path/to/lerobot/dataset
+tailor check dataset.zip                # zip 归档（自动剥掉包裹层目录）
+tailor check lerobot/unitreeh1_fold_clothes   # HF repo id：meta 预检，不下载全量
+tailor check lerobot/... --full               # 下载全部，跑满 22 条检查
 ```
 
 ```
@@ -43,6 +46,10 @@ tailor check /path/to/lerobot/dataset
 └───────────────────┴────────┴──────────────┘
 ACCEPTED  ·  11 passed, 0 warn, 0 failed
 ```
+
+远程模式默认只拉 `meta/*`（几 MB、数秒）跑所有元数据级检查——依赖数据文件的
+检查会诚实 SKIP，不假报 FAIL。`HF_ENDPOINT` 环境变量生效（镜像可用）；下载缓存在
+`~/.cache/tailor-hf/`。
 
 退出码让它可以直接当 CI 门禁用：**0** 收货 · **1** 拒收 · **2** 不可读（`--fail-on-warn`
 让 WARN 也以 1 退出）。`--json` 输出机器可读结果；`--markdown report.md` 写出可贴
@@ -129,9 +136,7 @@ tailor check /data/dataset --profile my_requirements.yaml
 
 v0.1 验收套件已交付。路线图按优先级排列：
 
-**验收纵深（v0.2）**——剩余：
-
-- 按 HF repo id 远程验收（下载前先查元数据）、zip 归档支持
+**验收纵深（v0.2）**——已完成。
 
 **流水线闭环（v0.3+）——Cut/Sew/Re-check/Register：**
 

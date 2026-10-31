@@ -85,6 +85,8 @@ def check_episodes_metadata(snap: DatasetSnapshot, cfg: dict | None = None) -> C
 
 def check_episode_files_exist(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
+    if not (snap.root / "data").is_dir():
+        return _skip("episode_files", "data/ not on disk (meta-only run? use --full)")
     if snap.episodes is None:
         return _skip("episode_files", "episode metadata unreadable")
     version = (snap.info or {}).get("codebase_version")
@@ -413,6 +415,8 @@ def _video_keys(info: dict) -> list[str]:
 
 def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
+    if not (snap.root / "videos").is_dir():
+        return _skip("video_files", "videos/ not on disk (meta-only run? use --full)")
     if snap.info is None or snap.episodes is None:
         return _skip("video_files", "info.json or episode metadata unreadable")
     keys = _video_keys(snap.info)
@@ -449,6 +453,8 @@ def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
 
 def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
+    if not (snap.root / "videos").is_dir():
+        return _skip("video_streams", "videos/ not on disk (meta-only run? use --full)")
     if snap.info is None or snap.episodes is None:
         return _skip("video_streams", "info.json or episode metadata unreadable")
     keys = _video_keys(snap.info)

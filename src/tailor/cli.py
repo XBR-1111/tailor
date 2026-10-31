@@ -31,6 +31,11 @@ def check(
     profile: Path | None = typer.Option(
         None, "--profile", "-p", help="YAML acceptance profile (per-check thresholds/severities)."
     ),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help="Remote repo id: download the whole dataset, not just meta (full 22-check run).",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
     markdown: Path | None = typer.Option(
         None,
@@ -48,10 +53,14 @@ def check(
 
     Exit codes: 0 accepted (no FAIL) · 1 rejected (>=1 FAIL) · 2 unreadable dataset.
     """
-    if not path.is_dir():
-        console.print(f"[red]not a directory:[/red] {path}")
-        raise typer.Exit(code=2)
     from tailor.profile import ProfileError, load_profile
+    from tailor.source import resolve_input
+
+    try:
+        root = resolve_input(str(path), full=full)
+    except (FileNotFoundError, NotADirectoryError) as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=2) from e
 
     prof = None
     if profile is not None:
@@ -60,7 +69,7 @@ def check(
         except ProfileError as e:
             console.print(f"[red]invalid profile:[/red] {e}")
             raise typer.Exit(code=2) from e
-    snap = load_snapshot(path, max_episodes=max_episodes)
+    snap = load_snapshot(root, max_episodes=max_episodes)
     if not snap.readable:
         console.print(
             "[red]dataset unreadable:[/red] missing meta/info.json or meta/episodes.jsonl"

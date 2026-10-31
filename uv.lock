@@ -2273,10 +2273,11 @@ wheels = [
 
 [[package]]
 name = "tailor"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "av" },
+    { name = "huggingface-hub" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pyyaml" },
@@ -2302,6 +2303,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "av", specifier = ">=12" },
+    { name = "huggingface-hub", specifier = ">=0.26" },
     { name = "lerobot", extras = ["dataset"], marker = "extra == 'lerobot'", specifier = ">=0.6" },
     { name = "pandas", specifier = ">=2" },
     { name = "pyarrow", specifier = ">=15" },

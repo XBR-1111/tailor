@@ -10,6 +10,7 @@ label"): format compliance, metadata-vs-data consistency, integrity.
 
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -203,14 +204,25 @@ def _feature_dim(info: dict, name: str) -> int | None:
     return None
 
 
+def _longest_true_run(mask: np.ndarray) -> int:
+    """Longest run of consecutive True values in a 1-D boolean array."""
+    if not mask.any():
+        return 0
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], mask.view(np.int8), [0]])))
+    if edges.size < 2:  # all True
+        return int(mask.size)
+    return int((edges[1::2] - edges[0::2]).max())
+
+
 def check_state_action_dims(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
     if snap.info is None or not snap.frames:
         return _skip("state_action_dims", "no readable frames to compare against info.json")
     problems = []
-    for idx, df in sorted(snap.frames.items()):
+    for idx in sorted(snap.frames):
+        df = snap.frames[idx]
         if len(df) == 0:
-            # a readable-but-empty episode parquet: iloc[0] below would raise,
+            # a readable-but-empty episode parquet: no rows to infer dims,
             # and an empty episode is itself a defect worth naming
             problems.append((idx, "-", "empty episode file (0 rows)"))
             continue
@@ -219,6 +231,9 @@ def check_state_action_dims(snap: DatasetSnapshot, cfg: dict | None = None) -> C
             if col not in df.columns:
                 problems.append((idx, col, "column missing"))
                 continue
+            # dims from the first row only — converting the whole column
+            # here would cost a full np.stack for a number we can read off
+            # one element (col_array stays for the checks that need values)
             val = df[col].iloc[0]
             dim = len(val) if hasattr(val, "__len__") else 1
             if declared is not None and dim != declared:
@@ -237,13 +252,11 @@ def check_nan_inf(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult
     if not snap.frames:
         return _skip("nan_inf", "no readable frames")
     bad = []
-    for idx, df in sorted(snap.frames.items()):
-        if len(df) == 0:
-            continue
+    for idx in sorted(snap.frames):
         for col in ("observation.state", "action"):
-            if col not in df.columns:
+            arr = snap.col_array(idx, col)
+            if arr is None:
                 continue
-            arr = np.stack([np.asarray(v, dtype=float) for v in df[col]])
             n_bad = int((~np.isfinite(arr)).sum())
             if n_bad:
                 bad.append((idx, col, n_bad))
@@ -267,16 +280,19 @@ def check_timestamps(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRes
     tolerance = cfg.get("spacing_tolerance", 0.1)
     problems = []
     spacing_warns = []
-    for idx, df in sorted(snap.frames.items()):
+    for idx in sorted(snap.frames):
+        df = snap.frames[idx]
         if "timestamp" not in df.columns:
             problems.append((idx, "timestamp column missing"))
             continue
-        ts = df["timestamp"].to_list()
-        diffs = [b - a for a, b in zip(ts, ts[1:], strict=False)]
-        if any(d <= 0 for d in diffs):
+        ts = np.asarray(df["timestamp"], dtype=float)
+        if ts.size < 2:
+            continue
+        diffs = np.diff(ts)
+        if (diffs <= 0).any():
             problems.append((idx, "non-monotonic timestamps"))
             continue
-        if any(abs(d - expected_dt) > tolerance * expected_dt for d in diffs):
+        if (np.abs(diffs - expected_dt) > tolerance * expected_dt).any():
             spacing_warns.append(idx)
     if problems:
         return _fail(
@@ -319,14 +335,10 @@ def check_stats_recompute(snap: DatasetSnapshot, cfg: dict | None = None) -> Che
         stats = declared.get(col)
         if not stats or col not in next(iter(snap.frames.values())).columns:
             continue
-        values = np.stack(
-            [
-                np.asarray(v, dtype=float)
-                for df in snap.frames.values()
-                if col in df.columns
-                for v in df[col]
-            ]
-        )
+        arrays = [a for a in (snap.col_array(idx, col) for idx in snap.frames) if a is not None]
+        if not arrays:
+            continue
+        values = np.concatenate(arrays, axis=0) if len(arrays) > 1 else arrays[0]
         for stat, actual in (
             ("mean", values.mean(axis=0)),
             ("std", values.std(axis=0)),
@@ -366,17 +378,13 @@ def check_action_quality(snap: DatasetSnapshot, cfg: dict | None = None) -> Chec
     frozen_best: dict[int, int] = {}
     clipped_eps: list[int] = []
     jump_eps: list[int] = []
-    for idx, df in sorted(snap.frames.items()):
-        if "action" not in df.columns or len(df) < 2:
+    for idx in sorted(snap.frames):
+        actions = snap.col_array(idx, "action")
+        if actions is None or len(actions) < 2:
             continue
-        actions = np.stack([np.asarray(v, dtype=float) for v in df["action"]])
         # frozen: longest run of identical consecutive action vectors
         same = (np.diff(actions, axis=0) == 0).all(axis=1)
-        longest = 0
-        run = 0
-        for flag in same:
-            run = run + 1 if flag else 0
-            longest = max(longest, run)
+        longest = _longest_true_run(same)
         if longest >= frozen_frames:
             frozen_eps.append(idx)
             frozen_best[idx] = longest
@@ -390,11 +398,7 @@ def check_action_quality(snap: DatasetSnapshot, cfg: dict | None = None) -> Chec
             lo, hi, span = range_edges
             at_edge = (actions <= lo + 0.01 * span) | (actions >= hi - 0.01 * span)
             for dim in range(at_edge.shape[1]):
-                run = best = 0
-                for flag in at_edge[:, dim]:
-                    run = run + 1 if flag else 0
-                    best = max(best, run)
-                if best >= clip_run:
+                if _longest_true_run(at_edge[:, dim]) >= clip_run:
                     clipped_eps.append(idx)
                     break
         # jumps: fraction of frame-to-frame deltas beyond k sigma
@@ -485,18 +489,23 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     tolerance = cfg.get("frame_tolerance", 1)
     version = (snap.info or {}).get("codebase_version")
 
-    def _probe(path):
+    def _probe(path: Path) -> tuple[int, int, int]:
         # packet count == frame count only for CFR streams without B-frames;
         # B-frame encodes may need decoded-frame counting (frame_tolerance
-        # absorbs the usual off-by-a-couple, not systematic differences)
+        # absorbs the usual off-by-a-couple, not systematic differences).
+        # Container nb_frames metadata is trusted when present (MP4/H.264
+        # carries it): reading the header beats demuxing every packet.
         container = av.open(str(path))
         stream = container.streams.video[0]
-        frames = sum(1 for p in container.demux(video=0) if p.dts is not None)
+        nb = int(getattr(stream, "frames", 0) or 0)
+        frames = nb if nb > 0 else sum(1 for p in container.demux(video=0) if p.dts is not None)
         w, h = stream.codec_context.width, stream.codec_context.height
         container.close()
         return frames, w, h
 
-    problems = []
+    # collect probe jobs first, run them in parallel (av releases the GIL),
+    # then judge — video probing dominates wall time on video-heavy datasets
+    jobs: list[tuple[str, str, Path, int]] = []  # (key, label, path, expected)
     for key in keys:
         shape = snap.info["features"][key].get("shape", [])
         if version == "v3.0":
@@ -511,18 +520,7 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
                 path = snap.root / "videos" / key / f"chunk-{c:03d}" / f"file-{f:03d}.mp4"
                 if not path.is_file():
                     continue  # already reported by video_files
-                try:
-                    frames, w, h = _probe(path)
-                except Exception:
-                    problems.append(f"{key}: {path.name} undecodable")
-                    continue
-                expected = sum(lengths)
-                if abs(frames - expected) > tolerance:
-                    problems.append(
-                        f"{key} {path.name}: {frames} frames vs {expected} episode frames"
-                    )
-                if len(shape) >= 2 and (h, w) != (shape[0], shape[1]):
-                    problems.append(f"{key} {path.name}: {w}x{h} vs declared {shape[1]}x{shape[0]}")
+                jobs.append((key, path.name, path, sum(lengths)))
         else:
             for ep in snap.episodes:
                 idx = ep.get("episode_index", -1)
@@ -535,19 +533,37 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
                 )
                 if not path.is_file():
                     continue
-                try:
-                    frames, w, h = _probe(path)
-                except Exception:
-                    problems.append(f"{key}: episode {idx} video undecodable")
-                    continue
-                expected = ep.get("length", 0)
-                if abs(frames - expected) > tolerance:
-                    problems.append(f"{key} ep {idx}: {frames} frames vs episode length {expected}")
-                if len(shape) >= 2 and (h, w) != (shape[0], shape[1]):
-                    problems.append(f"{key} ep {idx}: {w}x{h} vs declared {shape[1]}x{shape[0]}")
+                jobs.append((key, f"ep {idx}", path, ep.get("length", 0)))
+
+    problems: list[str] = []
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    workers = min(4, os.cpu_count() or 1)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        probed = list(pool.map(lambda j: _safe_probe(_probe, j[2]), jobs))
+    for (key, label, _path, expected), result in zip(jobs, probed, strict=True):
+        shape = snap.info["features"][key].get("shape", [])
+        if isinstance(result, Exception):
+            problems.append(f"{key}: {label} video undecodable")
+            continue
+        frames, w, h = result
+        if abs(frames - expected) > tolerance:
+            problems.append(f"{key} {label}: {frames} frames vs {expected} episode frames")
+        if len(shape) >= 2 and (h, w) != (shape[0], shape[1]):
+            problems.append(f"{key} {label}: {w}x{h} vs declared {shape[1]}x{shape[0]}")
     if problems:
         return _fail("video_streams", f"{len(problems)} stream problem(s)", problems=problems[:10])
     return _ok("video_streams", f"{len(keys)} stream(s) probed")
+
+
+def _safe_probe(
+    probe: "Callable[[Path], tuple[int, int, int]]", path: Path
+) -> tuple[int, int, int] | Exception:
+    try:
+        return probe(path)
+    except Exception as e:  # undecodable container must fail the check, not the run
+        return e
 
 
 def check_zero_variance(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
@@ -556,13 +572,11 @@ def check_zero_variance(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
         return _skip("zero_variance", "no readable frames")
     eps = cfg.get("eps", 1e-6)
     flat = []
-    for idx, df in sorted(snap.frames.items()):
-        if len(df) == 0:
-            continue
+    for idx in sorted(snap.frames):
         for col in ("observation.state", "action"):
-            if col not in df.columns:
+            arr = snap.col_array(idx, col)
+            if arr is None:
                 continue
-            arr = np.stack([np.asarray(v, dtype=float) for v in df[col]])
             dead = np.where(arr.std(axis=0) < eps)[0].tolist()
             if dead:
                 for dim in dead:
@@ -618,10 +632,11 @@ def check_frame_continuity(snap: DatasetSnapshot, cfg: dict | None = None) -> Ch
             problems.append((idx, f"{n} rows vs declared length {declared[idx]}"))
             continue
         if "frame_index" in df.columns:
-            fi = df["frame_index"].to_list()
-            holes = [i for i in range(len(fi)) if fi[i] != i]
-            if holes:
-                problems.append((idx, f"frame_index has holes (first at {holes[0]})"))
+            fi = np.asarray(df["frame_index"])
+            # holes = any position where frame_index deviates from 0..n-1
+            if fi.size and (fi != np.arange(fi.size)).any():
+                first_hole = int(np.flatnonzero(fi != np.arange(fi.size))[0])
+                problems.append((idx, f"frame_index has holes (first at {first_hole})"))
     if problems:
         return _fail(
             "frame_continuity",
@@ -700,11 +715,9 @@ def check_duplicate_episodes(snap: DatasetSnapshot, cfg: dict | None = None) -> 
     if len(snap.frames) < 2:
         return _skip("duplicate_episodes", "need >=2 readable episodes")
 
-    from tailor.filtering import trajectory_digest
-
     hashes: dict[str, list[int]] = {}
-    for idx, df in sorted(snap.frames.items()):
-        h = trajectory_digest(df)
+    for idx in sorted(snap.frames):
+        h = snap.trajectory_digest(idx)
         if h is not None:
             hashes.setdefault(h, []).append(idx)
     dupes = {h: eps for h, eps in hashes.items() if len(eps) > 1}

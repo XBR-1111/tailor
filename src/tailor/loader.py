@@ -61,14 +61,22 @@ def load_snapshot(root: Path, max_episodes: int | None = None) -> DatasetSnapsho
                     if idx in seen and idx not in snap.frames:
                         snap.frames[idx] = g
         else:
+            # v2: one parquet per episode — reading them in parallel pays off
+            # from a few dozen episodes up (pyarrow releases the GIL on read)
+            import os
+            from concurrent.futures import ThreadPoolExecutor
+
+            wanted = []
             for ep in episodes:
                 raw = ep.get("episode_index")
-                if raw is None:
-                    continue
-                idx = int(raw)
-                ep_df = _read_v2_episode_frames(str(root), idx)
-                if ep_df is not None:
-                    snap.frames[idx] = ep_df
+                if raw is not None:
+                    wanted.append(int(raw))
+            workers = min(4, os.cpu_count() or 1)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                frames = pool.map(lambda i: (i, _read_v2_episode_frames(str(root), i)), wanted)
+                for idx, ep_df in frames:
+                    if ep_df is not None:
+                        snap.frames[idx] = ep_df
     return snap
 
 

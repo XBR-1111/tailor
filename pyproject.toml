@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lerobot-tailor"
-version = "0.6.0"
+version = "0.7.0"
 description = "Refine distributed robot datasets into training-ready data: acceptance checks, episode-level filtering, deterministic cleaning, provenance."
 readme = "README.md"
 license = "Apache-2.0"
@@ -42,6 +42,7 @@ dev = [
     "ruff>=0.15",
     "pytest>=8",
     "pytest-cov>=6",
+    "pytest-xdist>=3",
     "mypy>=1.14",
     "pandas-stubs>=2",
     "types-PyYAML>=6",
@@ -56,7 +57,7 @@ target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "W"]
+select = ["E", "F", "I", "UP", "B", "W", "SIM", "C4", "RET", "RUF"]
 # B008: typer/fastapi idiom — Argument()/Option() as parameter defaults is the documented pattern
 ignore = ["B008"]
 
@@ -69,9 +70,9 @@ source = ["tailor"]
 branch = true
 
 [tool.coverage.report]
-# baseline 2026-10: 79% (cli's filter command needs lerobot, covered by
+# baseline 2026-11: 81% (cli's filter command needs lerobot, covered by
 # manual end-to-end runs, not CI). tighten as the suite grows
-fail_under = 75
+fail_under = 81
 show_missing = true
 
 [tool.mypy]
@@ -81,6 +82,7 @@ warn_redundant_casts = true
 no_implicit_optional = true
 check_untyped_defs = true
 disallow_incomplete_defs = true
+disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = ["av.*", "lerobot.*", "pyarrow.*"]

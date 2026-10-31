@@ -5,33 +5,9 @@ drop set with per-episode reasons. The actual dataset rewrite lives in the CLI
 layer behind the [lerobot] extra so the acceptance core stays dependency-free.
 """
 
-import hashlib
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
-
-import numpy as np
 
 from tailor.model import CheckResult, DatasetSnapshot, Status
-
-if TYPE_CHECKING:
-    import pandas as pd
-
-
-def trajectory_digest(df: "pd.DataFrame") -> str | None:
-    """Byte-level digest of one episode's state+action trajectory.
-
-    Shared by the duplicate_episodes check (Accept) and --dedupe (Cut) so the
-    two can never disagree about what counts as a duplicate. float64 coercion
-    first: identical trajectories stored as float32/float64 must hash equal,
-    and NaN bytes hash equal to NaN bytes (which is the desired identity here).
-    """
-    cols = [c for c in ("observation.state", "action") if c in df.columns]
-    if not cols:
-        return None
-    blob = b"".join(
-        np.ascontiguousarray(np.asarray(v, dtype=np.float64)).tobytes() for c in cols for v in df[c]
-    )
-    return hashlib.sha256(blob).hexdigest()
 
 
 @dataclass
@@ -86,10 +62,11 @@ def collect_drops(
                 )
     if dedupe:
         # duplicate episodes are detected by value: drop every later member of
-        # each identical group, keep the first
+        # each identical group, keep the first (digests come from the shared
+        # snapshot cache — zero re-conversion even right after a check run)
         seen: dict[str, int] = {}
-        for idx, df in sorted(snap.frames.items()):
-            h = trajectory_digest(df)
+        for idx in sorted(snap.frames):
+            h = snap.trajectory_digest(idx)
             if h is None:
                 continue
             if h in seen:

@@ -166,6 +166,14 @@ tailor check /data/dataset --profile my_requirements.yaml
 
 已在一个真实的 921 MB 分发数据集（`lerobot/unitreeh1_fold_clothes`，38 episodes / 1.9 万帧 / 双目相机）上验证，配合注入坏数据的确定性合成 fixture——每种坏数据都被至少一条测试抓住，两种格式版本各验一遍。这个真实数据集自身带着两个被 tailor 首跑就抓到的问题：一个 action 维贴边界 29 帧（gripper 夹住叠好的衣服，WARN 级）；以及一处真实的元数据缺陷——`cam_left` 的 episode 分片指针全部指向 `file-000.mp4`，但它的 500 帧实际躺在无人引用的 `file-001.mp4` 里。已用官方读取器验证：`LeRobotDataset` 加载正常，但 episode 37 的所有帧都抛 `IndexError`（视频索引封顶 18500）——训练只要采到最后一个 episode 就崩。
 
+## 性能
+
+每列数据只做一次 numpy 数组转换、全部检查共享（`DatasetSnapshot.col_array`）；
+视频探测走容器元数据（`nb_frames`）+ 线程池并行；连段扫描全部向量化。
+在 15 万帧合成数据集（300 episode × 500 帧）上：checks 阶段 0.79s → 0.22s，
+纯检查计算约 11 倍——端到端倍数更低，因为 PyAV 装载（约 0.16s，每进程一次）
+占了剩余时间的大头。复现：`python scripts/bench.py`。
+
 ## 状态
 
 验收套件、filter/clean 与血缘台账均已交付（v0.6）。路线图按优先级排列：

@@ -27,7 +27,7 @@ def test_dup_timestamps_fixed_by_rebuild(tmp_path: Path) -> None:
     assert _status_of(ds, "timestamps") in (Status.FAIL, Status.WARN)
     snap = load_snapshot(ds)
     fps = float(snap.info["fps"])
-    files, rows = rebuild_timestamps(snap, fps)
+    _files, rows = rebuild_timestamps(snap, fps)
     assert rows > 0
     assert _status_of(ds, "timestamps") == Status.PASS
 

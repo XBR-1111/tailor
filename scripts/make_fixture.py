@@ -19,6 +19,14 @@ EP_LENGTH = 20
 STATE_DIM = 6
 ACTION_DIM = 6
 
+
+def set_scale(episodes: int, frames: int) -> None:
+    """Override fixture scale (bench / dev datasets bigger than unit-test size)."""
+    global N_EPISODES, EP_LENGTH
+    N_EPISODES = episodes
+    EP_LENGTH = frames
+
+
 CORRUPTIONS = (
     "nan",  # NaN in observation.state of episode 1
     "missing-file",  # delete episode 1's parquet (v2) / the data shard (v3)
@@ -297,7 +305,10 @@ def main() -> None:
     parser.add_argument("out", type=Path, help="output dataset directory")
     parser.add_argument("--format", choices=("v2.1", "v3.0"), default="v2.1")
     parser.add_argument("--corrupt", choices=CORRUPTIONS, default=None)
+    parser.add_argument("--episodes", type=int, default=3, help="episode count (default 3)")
+    parser.add_argument("--frames", type=int, default=20, help="frames per episode (default 20)")
     args = parser.parse_args()
+    set_scale(args.episodes, args.frames)
     if args.out.exists():
         shutil.rmtree(args.out)
     maker = make_v2 if args.format == "v2.1" else make_v3

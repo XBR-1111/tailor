@@ -183,6 +183,17 @@ official reader: `LeRobotDataset` loads fine but every episode-37 frame
 raises `IndexError` (video index capped at 18500), so training crashes the
 moment a sampler touches the last episode.
 
+## Performance
+
+The suite converts each episode column to a numpy array exactly once and
+shares it across checks (`DatasetSnapshot.col_array`), probes videos through
+container metadata (`nb_frames`) in a thread pool, and vectorizes the
+run-length scans. On a synthetic 150k-frame dataset (300 episodes x 500
+frames): checks stage 0.79s -> 0.22s vs v0.5, ~11x on the pure check
+computation — the end-to-end ratio is lower because loading PyAV (~0.16s,
+one-time per process) dominates what's left. Reproduce with
+`python scripts/bench.py`.
+
 ## Status
 
 Acceptance suite, filter/clean and the provenance ledger shipped (v0.6).

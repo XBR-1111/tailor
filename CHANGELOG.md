@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-01
+
+### Changed
+- **Performance**: each episode column is converted to a numpy array once
+  and shared by every check (`DatasetSnapshot.col_array` / `trajectory_digest`);
+  video probing reads container `nb_frames` metadata (header read instead of
+  full demux) and runs in a thread pool; run-length scans (frozen actions,
+  range-edge pegging) are vectorized; timestamps/frame-continuity checks are
+  numpy-native; v2 episode parquets load in parallel. 150k-frame benchmark:
+  checks stage 0.79s -> 0.22s, ~11x on pure check computation
+  (`scripts/bench.py` reproduces; `make_fixture.py` gained --episodes/--frames).
+
+### Engineering
+- ruff rule groups extended (SIM/C4/RET/RUF), mypy `disallow_untyped_defs`,
+  `py.typed` ships in the wheel; coverage floor 75 -> 82; tests run under
+  pytest-xdist in CI (37s -> ~11s locally); pre-commit config added.
+- release workflow is Trusted-Publishing ready (no PyPI token in CI).
+
 ## [0.6.0] — 2026-10-31
 
 ### Fixed

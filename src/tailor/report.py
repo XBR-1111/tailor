@@ -72,7 +72,7 @@ def render_markdown(results: list[CheckResult], dataset: str) -> str:
     """PR/dataset-card friendly report."""
     fails, warns, passes, skips = _counts(results)
     verdict = "REJECTED" if fails else ("ACCEPTED WITH WARNINGS" if warns else "ACCEPTED")
-    icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌", "SKIP": "➖"}
+    icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌", "SKIP": "➖"}  # noqa: RUF001
     summary = f"{passes} passed, {warns} warn, {fails} failed"
     if skips:
         summary += f", {skips} skipped"

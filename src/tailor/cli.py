@@ -205,7 +205,7 @@ def filter_(
 @app.command()
 def clean(
     path: Path = typer.Argument(..., help="Path to a LeRobot-format dataset directory."),
-    apply: bool = typer.Option(  # noqa: A002
+    apply: bool = typer.Option(
         False, "--apply", help="Write the repairs (default is a dry-run that only reports)."
     ),
     no_stats: bool = typer.Option(False, "--no-stats", help="Skip stats recompute."),

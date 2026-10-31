@@ -22,7 +22,7 @@ dependencies = [
     "pyyaml>=6",
     "av>=12",
     "rich>=13",
-    "pyarrow>=15",
+    "pyarrow>=26.0.0",
     "pandas>=2",
 ]
 

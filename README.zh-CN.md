@@ -48,6 +48,27 @@ ACCEPTED  ·  11 passed, 0 warn, 0 failed
 让 WARN 也以 1 退出）。`--json` 输出机器可读结果；`--markdown report.md` 写出可贴
 PR / dataset card 的报告；`--max-episodes N` 对大数据集只抽查前 N 个 episode。
 
+## Filter——Cut（裁剪）工序
+
+`tailor filter` 用 lerobot 官方 `delete_episodes` 引擎重写数据集、剔除不要的
+episode（产物天然保持格式兼容——parquet、视频、stats 一致性重建）。产物
+**自动重新验收**，verdict 直接打印。
+
+```bash
+# 显式剔除（比如报告里点名的坏 episode）
+tailor filter /data/ds --drop-episodes 5,17,23 -o /data/ds_clean
+
+# 由验收驱动：剔除 FAIL 级检查能定位到的 episode（--drop-warn 连 WARN 一起）
+tailor filter /data/ds --from-check --drop-warn
+
+# 规则式
+tailor filter /data/ds --min-length 100        # 短于你的 policy 窗口
+tailor filter /data/ds --dedupe                # 逐字节相同的轨迹，保留第一个
+```
+
+需要 `pip install 'tailor[lerobot]'`（验收本体保持零重依赖）。当前支持 v3.0。
+每次剔除都打印原因——不做静默删除。
+
 ## 可配置的验收 profile
 
 什么算合格，每个机器人、每个任务、每种训练配置都不一样。profile（YAML
@@ -112,9 +133,10 @@ v0.1 验收套件已交付。路线图按优先级排列：
 
 - 按 HF repo id 远程验收（下载前先查元数据）、zip 归档支持
 
-**流水线闭环（v0.3+）**——Cut/Sew/Re-check/Register：
+**流水线闭环（v0.3+）——Cut/Sew/Re-check/Register：**
 
-- `filter` / `clean` 命令构建在 lerobot 官方 `dataset_tools`（delete_episodes、compute_stats）之上，挂 `[lerobot]` extra——产物天然保持格式兼容；验收本体保持零重依赖
+- ~~`filter`~~ 已交付（见上）：显式 / 规则式 / 验收驱动剔除、去重，构建于官方 `delete_episodes`，自动 re-check
+- `clean` 命令（时戳重建、stats 重算）构建于官方 `compute_stats`
 - YAML 配方（跟随上游 `recipe.py` 的方向，不自造 schema）
 - 血缘台账 + 登记
 

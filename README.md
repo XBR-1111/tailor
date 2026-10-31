@@ -49,6 +49,29 @@ Exit codes make it a CI gate: **0** accepted · **1** rejected · **2** unreadab
 `--markdown report.md` writes a PR/dataset-card friendly report, `--max-episodes N`
 samples the first N episodes of huge datasets.
 
+## Filter — the Cut stage
+
+`tailor filter` rewrites a dataset without the episodes you don't want, using
+lerobot's official `delete_episodes` engine (so the output is format-compatible
+by construction — parquet, videos and stats are rebuilt consistently). The
+result is **re-checked automatically**; its verdict is printed.
+
+```bash
+# drop explicit episodes (say, the ones a report flagged)
+tailor filter /data/ds --drop-episodes 5,17,23 -o /data/ds_clean
+
+# drop everything FAIL-level checks can pin to an episode (--drop-warn adds WARN)
+tailor filter /data/ds --from-check --drop-warn
+
+# rule-based
+tailor filter /data/ds --min-length 100        # too short for your policy
+tailor filter /data/ds --dedupe                # byte-identical trajectories, keep first
+```
+
+Requires `pip install 'tailor[lerobot]'` (the acceptance suite itself stays
+dependency-free). Currently v3.0 datasets. Every drop is printed with its
+reason — no silent removals.
+
 ## Configurable acceptance profiles
 
 What counts as acceptable differs per robot, task and training config. A
@@ -124,9 +147,10 @@ v0.1 acceptance suite shipped. Roadmap, in priority order:
 
 - remote acceptance from a HF repo id (check metadata before downloading), zip archives
 
-**Pipeline closure (v0.3+)** — Cut/Sew/Re-check/Register:
+**Pipeline closure (v0.3+) — Cut/Sew/Re-check/Register:**
 
-- `filter` / `clean` commands built on lerobot's official `dataset_tools` (delete_episodes, compute_stats) behind a `[lerobot]` extra — outputs stay format-compatible by construction; acceptance itself stays dependency-free
+- ~~`filter`~~ shipped (see above): explicit / rule-based / check-driven drops, dedupe, on official `delete_episodes`, auto re-check
+- `clean` commands (timestamp rebuild, stats recompute) on official `compute_stats`
 - YAML recipes (tracking upstream `recipe.py` direction rather than inventing a schema)
 - provenance ledger + registration
 

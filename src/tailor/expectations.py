@@ -142,7 +142,12 @@ def check_episode_lengths(snap: DatasetSnapshot, cfg: dict | None = None) -> Che
         return _skip("episode_lengths", "episodes.jsonl unreadable")
     bad = [ep.get("episode_index") for ep in snap.episodes if not ep.get("length", 0) > 0]
     if bad:
-        return _fail("episode_lengths", f"{len(bad)} episode(s) with length<=0", bad=bad[:20])
+        return _fail(
+            "episode_lengths",
+            f"{len(bad)} episode(s) with length<=0",
+            bad=bad[:20],
+            episodes=bad[:20],
+        )
     minimum = cfg.get("min", 2)
     short = [ep.get("episode_index") for ep in snap.episodes if 0 < ep.get("length", 0) < minimum]
     if short:
@@ -150,6 +155,7 @@ def check_episode_lengths(snap: DatasetSnapshot, cfg: dict | None = None) -> Che
             "episode_lengths",
             f"{len(short)} very short episode(s) (<{minimum} frames) will break chunked sampling",
             short=short[:20],
+            episodes=short[:20],
         )
     return _ok("episode_lengths")
 
@@ -267,7 +273,12 @@ def check_timestamps(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRes
         if any(abs(d - expected_dt) > tolerance * expected_dt for d in diffs):
             spacing_warns.append(idx)
     if problems:
-        return _fail("timestamps", "timestamp problems", problems=problems[:10])
+        return _fail(
+            "timestamps",
+            "timestamp problems",
+            problems=problems[:10],
+            episodes=sorted({p[0] for p in problems if isinstance(p[0], int)}),
+        )
     if spacing_warns:
         return _warn(
             "timestamps",
@@ -533,6 +544,7 @@ def check_zero_variance(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
             "zero_variance",
             f"{len(flat)} dim(s) never move (std < {eps:g}): normalization would divide by zero",
             dims=flat[:10],
+            episodes=sorted({t[0] for t in flat}),
         )
     return _ok("zero_variance")
 
@@ -587,6 +599,7 @@ def check_frame_continuity(snap: DatasetSnapshot, cfg: dict | None = None) -> Ch
             "frame_continuity",
             f"{len(problems)} continuity problem(s): dropped frames or row/length mismatch",
             problems=problems[:10],
+            episodes=sorted({p[0] for p in problems if isinstance(p[0], int)}),
         )
     return _ok("frame_continuity")
 
@@ -676,10 +689,14 @@ def check_duplicate_episodes(snap: DatasetSnapshot, cfg: dict | None = None) -> 
     dupes = {h: eps for h, eps in hashes.items() if len(eps) > 1}
     if dupes:
         pairs = list(dupes.values())[:10]
+        # 'episodes' drives --from-check: the later members whose removal
+        # breaks the duplication (first member of each group stays)
+        drop_later = sorted({eps for eps in dupes.values() for eps in eps[1:]})
         return _warn(
             "duplicate_episodes",
             f"{len(dupes)} group(s) of byte-identical state/action trajectories",
             groups=pairs,
+            episodes=drop_later[:50],
         )
     return _ok("duplicate_episodes")
 

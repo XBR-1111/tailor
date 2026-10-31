@@ -83,5 +83,104 @@ def check(
     raise typer.Exit(code=exit_code)
 
 
+@app.command(name="filter")
+def filter_(
+    path: Path = typer.Argument(..., help="Path to a LeRobot-format dataset directory (v3.0)."),
+    output: Path = typer.Option(
+        None, "--output", "-o", help="Output directory (default: <path>_filtered)."
+    ),
+    drop_episodes: str | None = typer.Option(
+        None, "--drop-episodes", help="Comma-separated episode indices to drop, e.g. '3,17,23'."
+    ),
+    min_length: int | None = typer.Option(
+        None, "--min-length", help="Drop episodes shorter than this many frames."
+    ),
+    dedupe: bool = typer.Option(
+        False, "--dedupe", help="Drop later members of duplicate episode groups."
+    ),
+    from_check: bool = typer.Option(
+        False, "--from-check", help="Drop episodes flagged by FAIL checks (run the suite first)."
+    ),
+    drop_warn: bool = typer.Option(
+        False, "--drop-warn", help="With --from-check: WARN-flagged episodes too."
+    ),
+    profile: Path | None = typer.Option(
+        None, "--profile", "-p", help="YAML acceptance profile for --from-check."
+    ),
+) -> None:
+    """Filter episodes out of a dataset into a new dataset (the Cut stage).
+
+    Requires the lerobot extra: pip install "tailor[lerobot]".
+    The output is re-checked after the rewrite; its verdict is printed.
+    """
+    if not any([drop_episodes, min_length is not None, dedupe, from_check]):
+        console.print(
+            "[red]no filter rule given[/red] "
+            "(see --drop-episodes / --min-length / --dedupe / --from-check)"
+        )
+        raise typer.Exit(code=2)
+    from tailor.filtering import collect_drops, parse_episode_list, render_decision
+
+    snap = load_snapshot(path)
+    if not snap.readable:
+        console.print("[red]dataset unreadable[/red]")
+        raise typer.Exit(code=2)
+    version = (snap.info or {}).get("codebase_version")
+    if version != "v3.0":
+        console.print(
+            f"[red]filter currently supports v3.0 datasets (this is {version});[/red] "
+            "convert first (lerobot's conversion scripts) or wait for v2 support"
+        )
+        raise typer.Exit(code=2)
+
+    explicit = parse_episode_list(drop_episodes) if drop_episodes else None
+    results = None
+    if from_check:
+        prof = None
+        if profile is not None:
+            from tailor.profile import ProfileError, load_profile
+
+            try:
+                prof = load_profile(profile)
+            except ProfileError as e:
+                console.print(f"[red]invalid profile:[/red] {e}")
+                raise typer.Exit(code=2) from e
+        results = run_all(snap, profile=prof)
+
+    decision = collect_drops(
+        snap,
+        explicit=explicit,
+        min_length=min_length,
+        dedupe=dedupe,
+        from_check=results,
+        drop_warn=drop_warn,
+    )
+    console.print(render_decision(decision, len(snap.episodes or [])))
+    if not decision.n_drop:
+        console.print("[green]nothing to drop — dataset unchanged[/green]")
+        raise typer.Exit(code=0)
+
+    try:
+        from lerobot.datasets.dataset_tools import delete_episodes as _del
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    except ImportError:
+        console.print("[red]lerobot not installed:[/red] pip install 'tailor[lerobot]'")
+        raise typer.Exit(code=2) from None
+
+    out = output or path.parent / f"{path.name}_filtered"
+    if out.exists():
+        console.print(f"[red]output exists:[/red] {out}")
+        raise typer.Exit(code=2)
+    src = LeRobotDataset(path.name, root=str(path))
+    _del(src, sorted(decision.drop), output_dir=str(out))
+    console.print(f"[green]wrote[/green] {out}")
+
+    # Re-check stage: the product must pass acceptance again
+    new_snap = load_snapshot(out)
+    recheck = run_all(new_snap)
+    render_terminal(recheck, str(out))
+    raise typer.Exit(code=0)
+
+
 if __name__ == "__main__":
     app()

@@ -144,6 +144,8 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
         episodes_meta.append(
             {
                 "episode_index": ep,
+                "meta/episodes/chunk_index": 0,
+                "meta/episodes/file_index": 0,
                 "data/chunk_index": 0,
                 "data/file_index": 0,
                 "dataset_from_index": total_frames,
@@ -271,8 +273,18 @@ def _write_info(meta: Path, fmt: str, corrupt: str | None, total_frames: int) ->
                 ),
                 "features": {
                     "observation.state": {"dtype": "float32", "shape": [STATE_DIM]},
+                    "observation.images.top": {
+                        "dtype": "video",
+                        "shape": [VIDEO_SIZE, VIDEO_SIZE, 3],
+                        "names": ["height", "width", "channel"],
+                    },
+                    "timestamp": {"dtype": "float32", "shape": [1]},
+                    "frame_index": {"dtype": "int64", "shape": [1]},
+                    "episode_index": {"dtype": "int64", "shape": [1]},
+                    "index": {"dtype": "int64", "shape": [1]},
+                    "task_index": {"dtype": "int64", "shape": [1]},
+                    **({"next.done": {"dtype": "bool", "shape": [1]}} if fmt == "v3.0" else {}),
                     "action": {"dtype": "float32", "shape": [ACTION_DIM]},
-                    VIDEO_KEY: {"dtype": "video", "shape": [VIDEO_SIZE, VIDEO_SIZE, 3]},
                 },
             },
             indent=2,

@@ -11,6 +11,7 @@ frames -> {episode_index: DataFrame}. Expectations never branch on version.
 import json
 from functools import lru_cache
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
@@ -53,15 +54,21 @@ def load_snapshot(root: Path, max_episodes: int | None = None) -> DatasetSnapsho
                     df = pd.read_parquet(f)
                 except Exception:
                     continue
-                for idx, g in df.groupby("episode_index"):
+                for raw_idx, g in df.groupby("episode_index"):
+                    # groupby keys are typed as a wide pandas union; by
+                    # construction episode_index is an integer column
+                    idx = int(cast("int", raw_idx))
                     if idx in seen and idx not in snap.frames:
                         snap.frames[idx] = g
         else:
             for ep in episodes:
-                idx = ep.get("episode_index")
-                df = _read_v2_episode_frames(str(root), idx)
-                if df is not None:
-                    snap.frames[idx] = df
+                raw = ep.get("episode_index")
+                if raw is None:
+                    continue
+                idx = int(raw)
+                ep_df = _read_v2_episode_frames(str(root), idx)
+                if ep_df is not None:
+                    snap.frames[idx] = ep_df
     return snap
 
 
@@ -87,7 +94,7 @@ def _load_v3_episodes(meta: Path) -> list[dict] | None:
     try:
         for f in files:
             for r in pd.read_parquet(f).to_dict("records"):
-                tasks = r.get("tasks")
+                tasks = r.get("tasks") or []
                 # v3 stores task TEXT per episode; only integer index lists
                 # yield a task_index — text lists leave None and the range
                 # check degrades to the total_tasks consistency check.

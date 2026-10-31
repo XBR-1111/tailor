@@ -10,6 +10,7 @@ label"): format compliance, metadata-vs-data consistency, integrity.
 
 import math
 from collections.abc import Callable
+from typing import Any
 
 from tailor.loader import SUPPORTED_VERSIONS, _episode_parquet_path
 from tailor.model import CheckResult, DatasetSnapshot, Status
@@ -21,11 +22,11 @@ def _ok(name: str, message: str = "") -> CheckResult:
     return CheckResult(name, Status.PASS, message)
 
 
-def _fail(name: str, message: str, **details) -> CheckResult:
+def _fail(name: str, message: str, **details: Any) -> CheckResult:
     return CheckResult(name, Status.FAIL, message, details)
 
 
-def _warn(name: str, message: str, **details) -> CheckResult:
+def _warn(name: str, message: str, **details: Any) -> CheckResult:
     return CheckResult(name, Status.WARN, message, details)
 
 
@@ -232,7 +233,7 @@ def check_nan_inf(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult
 
             # numpy scalars are not python float; coerce first so np.float32
             # values are judged by value, not by type
-            def _finite(v) -> bool:
+            def _finite(v: Any) -> bool:
                 try:
                     return math.isfinite(float(v))
                 except (TypeError, ValueError):
@@ -691,7 +692,7 @@ def check_duplicate_episodes(snap: DatasetSnapshot, cfg: dict | None = None) -> 
         pairs = list(dupes.values())[:10]
         # 'episodes' drives --from-check: the later members whose removal
         # breaks the duplication (first member of each group stays)
-        drop_later = sorted({eps for eps in dupes.values() for eps in eps[1:]})
+        drop_later = sorted({ep_i for grp in dupes.values() for ep_i in grp[1:]})
         return _warn(
             "duplicate_episodes",
             f"{len(dupes)} group(s) of byte-identical state/action trajectories",

@@ -8,6 +8,7 @@ from rich.console import Console
 from tailor import __version__
 from tailor.expectations import run_all
 from tailor.loader import load_snapshot
+from tailor.model import Status
 from tailor.report import render_json, render_terminal
 
 app = typer.Typer(
@@ -77,8 +78,8 @@ def check(
 
         markdown.write_text(render_markdown(results, str(path)))
         console.print(f"[dim]markdown report: {markdown}[/dim]")
-    fails = sum(r.status == "FAIL" for r in results)
-    warns = sum(r.status == "WARN" for r in results)
+    fails = sum(r.status == Status.FAIL for r in results)
+    warns = sum(r.status == Status.WARN for r in results)
     exit_code = 1 if fails or (fail_on_warn and warns) else 0
     raise typer.Exit(code=exit_code)
 

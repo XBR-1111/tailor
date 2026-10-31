@@ -44,7 +44,7 @@ def collect_drops(
     """Combine rules into one drop set; later rules never rescue earlier drops."""
     decision = DropDecision()
     episodes = snap.episodes or []
-    decision.keep = {ep.get("episode_index") for ep in episodes}
+    decision.keep = {ep["episode_index"] for ep in episodes if "episode_index" in ep}
 
     def _drop(idx: int, reason: str) -> None:
         decision.drop.setdefault(idx, []).append(reason)
@@ -56,7 +56,7 @@ def collect_drops(
         for ep in episodes:
             if ep.get("length", 0) < min_length:
                 _drop(
-                    ep.get("episode_index"),
+                    ep["episode_index"],
                     f"length {ep.get('length', 0)} < min-length {min_length}",
                 )
     if dedupe:

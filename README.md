@@ -2,6 +2,12 @@
 
 **Refine distributed robot datasets into training-ready data.**
 
+[![CI](https://github.com/XBR-1111/tailor/actions/workflows/ci.yml/badge.svg)](https://github.com/XBR-1111/tailor/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![mypy](https://img.shields.io/badge/mypy-checked-blue)](https://mypy-lang.org/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+
 English | [简体中文](README.zh-CN.md)
 
 tailor is a data-refinement pipeline for robot learning datasets (LeRobot **v2.0 / v2.1 / v3.0**):
@@ -19,7 +25,7 @@ Declarative recipes (YAML) in git; every dataset is reproducible and auditable.
 ## Quickstart
 
 ```bash
-pip install tailor            # once published; until then:
+pip install lerobot-tailor      # once published; until then:
 pip install git+https://github.com/XBR-1111/tailor
 
 tailor check /path/to/lerobot/dataset
@@ -39,12 +45,12 @@ tailor check lerobot/... --full               # download everything, all 22 chec
 │ episode_files     │  PASS  │              │
 │ total_frames      │  PASS  │ 19000        │
 │ episode_lengths   │  PASS  │              │
-│ task_indices      │  PASS  │ 1 tasks      │
+│ task_indices      │  PASS  │ 1 task       │
 │ state_action_dims │  PASS  │              │
 │ nan_inf           │  PASS  │              │
 │ timestamps        │  PASS  │              │
 └───────────────────┴────────┴──────────────┘
-ACCEPTED  ·  11 passed, 0 warn, 0 failed
+ACCEPTED  ·  11 passed, 0 warn, 0 failed  ·  11 skipped (meta-only run)
 ```
 
 Remote mode pulls only `meta/*` by default (seconds, a few MB) and runs every
@@ -55,7 +61,8 @@ FAIL. `HF_ENDPOINT` is respected (mirrors work); downloads cache under
 Exit codes make it a CI gate: **0** accepted · **1** rejected · **2** unreadable
 (`--fail-on-warn` makes WARN exit 1 too). `--json` emits machine-readable output,
 `--markdown report.md` writes a PR/dataset-card friendly report, `--max-episodes N`
-samples the first N episodes of huge datasets.
+samples the first N episodes of huge datasets (a convenience sample —
+tail-end episodes, a common corruption site, stay uncovered).
 
 ## Filter — the Cut stage
 
@@ -76,7 +83,7 @@ tailor filter /data/ds --min-length 100        # too short for your policy
 tailor filter /data/ds --dedupe                # byte-identical trajectories, keep first
 ```
 
-Requires `pip install 'tailor[lerobot]'` (the acceptance suite itself stays
+Requires `pip install 'lerobot-tailor[lerobot]'` (the acceptance suite itself stays
 dependency-free). Currently v3.0 datasets. Every drop is printed with its
 reason — no silent removals.
 
@@ -178,7 +185,8 @@ moment a sampler touches the last episode.
 
 ## Status
 
-v0.1 acceptance suite shipped. Roadmap, in priority order:
+Acceptance suite, filter/clean and the provenance ledger shipped (v0.6).
+Roadmap, in priority order:
 
 **Accept depth (v0.2)** — complete.
 

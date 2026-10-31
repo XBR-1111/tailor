@@ -2,6 +2,12 @@
 
 **把分发来的机器人数据集精炼为可直接训练的数据。**
 
+[![CI](https://github.com/XBR-1111/tailor/actions/workflows/ci.yml/badge.svg)](https://github.com/XBR-1111/tailor/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![mypy](https://img.shields.io/badge/mypy-checked-blue)](https://mypy-lang.org/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+
 [English](README.md) | 简体中文
 
 tailor 是面向机器人学习数据集（LeRobot **v2.0 / v2.1 / v3.0**）的数据精炼流水线：
@@ -19,7 +25,7 @@ tailor 是面向机器人学习数据集（LeRobot **v2.0 / v2.1 / v3.0**）的�
 ## 快速上手
 
 ```bash
-pip install tailor            # 发布后可用；当前可先：
+pip install lerobot-tailor      # 发布后可用；当前可先：
 pip install git+https://github.com/XBR-1111/tailor
 
 tailor check /path/to/lerobot/dataset
@@ -39,12 +45,12 @@ tailor check lerobot/... --full               # 下载全部，跑满 22 条检�
 │ episode_files     │  PASS  │              │
 │ total_frames      │  PASS  │ 19000        │
 │ episode_lengths   │  PASS  │              │
-│ task_indices      │  PASS  │ 1 tasks      │
+│ task_indices      │  PASS  │ 1 task       │
 │ state_action_dims │  PASS  │              │
 │ nan_inf           │  PASS  │              │
 │ timestamps        │  PASS  │              │
 └───────────────────┴────────┴──────────────┘
-ACCEPTED  ·  11 passed, 0 warn, 0 failed
+ACCEPTED  ·  11 passed, 0 warn, 0 failed  ·  11 skipped (meta-only run)
 ```
 
 远程模式默认只拉 `meta/*`（几 MB、数秒）跑所有元数据级检查——依赖数据文件的
@@ -53,7 +59,8 @@ ACCEPTED  ·  11 passed, 0 warn, 0 failed
 
 退出码让它可以直接当 CI 门禁用：**0** 收货 · **1** 拒收 · **2** 不可读（`--fail-on-warn`
 让 WARN 也以 1 退出）。`--json` 输出机器可读结果；`--markdown report.md` 写出可贴
-PR / dataset card 的报告；`--max-episodes N` 对大数据集只抽查前 N 个 episode。
+PR / dataset card 的报告；`--max-episodes N` 对大数据集只抽查前 N 个 episode（便利抽样——尾部 episode
+是坏数据的常见位置，不在覆盖范围内）。
 
 ## Filter——Cut（裁剪）工序
 
@@ -73,7 +80,7 @@ tailor filter /data/ds --min-length 100        # 短于你的 policy 窗口
 tailor filter /data/ds --dedupe                # 逐字节相同的轨迹，保留第一个
 ```
 
-需要 `pip install 'tailor[lerobot]'`（验收本体保持零重依赖）。当前支持 v3.0。
+需要 `pip install 'lerobot-tailor[lerobot]'`（验收本体保持零重依赖）。当前支持 v3.0。
 每次剔除都打印原因——不做静默删除。
 
 ## Clean——确定性修复
@@ -91,7 +98,7 @@ tailor clean /data/ds --apply    # 修复 + 备份 + 自动 re-check
 ## Register——血缘台账
 
 每次 `filter` 和 `clean --apply` 都会向数据集内的 `meta/tailor_ledger.jsonl`
-追加一条事件，**加工履历跟着数据走**：filter 在产物里写下出生记录（来源指纹、
+追加一条事件，**加工履历跟着数据走**：filter 在产物里写下出身记录（来源指纹、
 剔除了哪些 episode 及原因），clean 追加它重写了什么。
 
 ```bash
@@ -161,7 +168,7 @@ tailor check /data/dataset --profile my_requirements.yaml
 
 ## 状态
 
-v0.1 验收套件已交付。路线图按优先级排列：
+验收套件、filter/clean 与血缘台账均已交付（v0.6）。路线图按优先级排列：
 
 **验收纵深（v0.2）**——已完成。
 
@@ -172,4 +179,4 @@ v0.1 验收套件已交付。路线图按优先级排列：
 - ~~血缘台账~~ 已交付（见上）：append-only，随数据集走
 - YAML 配方（跟随上游 `recipe.py` 的方向，不自造 schema）
 
-生态参照：lerobot-doctor（诊断，已进官方 dataset visualizer）、Calibra（episode 处置建议）。tailor 的车道是**验收门禁 + 可执行的流水线**——verdict + 退出码当 CI 门，然后是带血缘的确定性精炼，不做又一份报告。
+生态参照：lerobot-doctor（诊断，已进官方 dataset visualizer）、Calibra（episode 处置建议）。tailor 的定位是**验收门禁 + 可执行的流水线**——verdict + 退出码当 CI 门，然后是带血缘的确定性精炼，不做又一份报告。

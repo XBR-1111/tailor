@@ -3,18 +3,19 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "tailor"
-version = "0.5.0"
+name = "lerobot-tailor"
+version = "0.6.0"
 description = "Refine distributed robot datasets into training-ready data: acceptance checks, episode-level filtering, deterministic cleaning, provenance."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 keywords = ["lerobot", "robotics", "dataset", "data-quality", "validation"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
@@ -35,10 +36,6 @@ Homepage = "https://github.com/XBR-1111/tailor"
 
 [project.scripts]
 tailor = "tailor.cli:app"
-
-[[tool.uv.index]]
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
-default = true
 
 # dev deps as a PEP 735 group (uv sync installs it), not an extra — pip -e ".[dev]" cannot see it
 [dependency-groups]
@@ -79,7 +76,7 @@ fail_under = 75
 show_missing = true
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true

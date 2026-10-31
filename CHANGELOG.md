@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-31
+
+### Fixed
+- **clean dry-run no longer writes to disk.** The timestamp-rebuild path used
+  the write-through implementation, so a dry-run silently rewrote parquet
+  files while reporting "nothing written". Dry-run now goes through a
+  detect-only pass; two regression tests pin parquet bytes unchanged.
+- **clean --apply now backs up the originals.** Timestamps were written
+  before the backup ran, so `<dataset>_pre_clean/` archived the already
+  rewritten data. Order is detect -> backup -> write; a regression test
+  asserts backups are byte-equal to the pre-clean files.
+- check exits 2 (not a traceback) when a HF download fails — the exit-code
+  contract now covers network errors.
+- filter re-checks the output under the SAME profile that drove the drops.
+- empty-but-readable episode parquet no longer crashes state_action_dims.
+- clean dry-run stats wording states the 0.1% noise floor and how it differs
+  from the stats_recompute check tolerance, instead of "already consistent".
+
+### Changed
+- PyPI name is `lerobot-tailor` (the `tailor` name is taken); the CLI stays
+  `tailor`. requires-python lowered to 3.11.
+- action_quality now attributes episodes in check details, so
+  `filter --from-check --drop-warn` can drop exactly the flagged episodes.
+- dataset fingerprints include video file sizes (video carries most of the
+  bytes; clean/filter outputs were previously indistinguishable).
+- report footers and JSON summaries count skipped checks — a meta-only run
+  reads "11 passed, 11 skipped" instead of a bare "11 passed".
+- clean ledger events use one structured shape (`{"what": ...}`); torn tail
+  lines in a ledger no longer break `tailor provenance`.
+- duplicate detection shares one trajectory digest between the check and
+  --dedupe; nan/inf detection vectorized; several duplicate helpers folded.
+
 ## [0.5.0] — 2026-10-31
 
 ### Added

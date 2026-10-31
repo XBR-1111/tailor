@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-31
+
+### Added
+- `tailor clean`: deterministic repairs — meta/stats.json recomputed from
+  parquet (video entries preserved), timestamps rebuilt as frame_index/fps.
+  Dry-run by default; --apply writes with per-file backups to
+  <dataset>_pre_clean/ outside the root, then re-checks automatically.
+  Same-process re-checks see fresh data (v2 frame cache invalidated on rewrite).
+  73 tests; coverage floor holding (75% gate, 79% actual).
+
 ## [0.3.0] — 2026-10-31
 
 ### Added

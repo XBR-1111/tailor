@@ -76,6 +76,18 @@ tailor filter /data/ds --dedupe                # 逐字节相同的轨迹，保�
 需要 `pip install 'tailor[lerobot]'`（验收本体保持零重依赖）。当前支持 v3.0。
 每次剔除都打印原因——不做静默删除。
 
+## Clean——确定性修复
+
+`tailor clean` 修确定性能修的：`meta/stats.json` 按 parquet 数据重算（video
+条目保留），timestamp 按 `frame_index / fps` 重建。默认 dry-run；`--apply`
+才写盘，每个被替换的文件备份到数据集外的 `<dataset>_pre_clean/`，完成后自动
+re-check 并打印 verdict。零 lerobot 依赖。
+
+```bash
+tailor clean /data/ds            # dry-run：只报告会改什么，不写盘
+tailor clean /data/ds --apply    # 修复 + 备份 + 自动 re-check
+```
+
 ## 可配置的验收 profile
 
 什么算合格，每个机器人、每个任务、每种训练配置都不一样。profile（YAML
@@ -141,7 +153,7 @@ v0.1 验收套件已交付。路线图按优先级排列：
 **流水线闭环（v0.3+）——Cut/Sew/Re-check/Register：**
 
 - ~~`filter`~~ 已交付（见上）：显式 / 规则式 / 验收驱动剔除、去重，构建于官方 `delete_episodes`，自动 re-check
-- `clean` 命令（时戳重建、stats 重算）构建于官方 `compute_stats`
+- ~~`clean`~~ 已交付（见上）：stats 重算 + 时戳重建，先 dry-run
 - YAML 配方（跟随上游 `recipe.py` 的方向，不自造 schema）
 - 血缘台账 + 登记
 

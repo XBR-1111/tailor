@@ -80,6 +80,19 @@ Requires `pip install 'tailor[lerobot]'` (the acceptance suite itself stays
 dependency-free). Currently v3.0 datasets. Every drop is printed with its
 reason — no silent removals.
 
+## Clean — deterministic repairs
+
+`tailor clean` fixes what deterministic math can fix: `meta/stats.json`
+recomputed from the parquet data (video entries preserved), timestamps
+rebuilt as `frame_index / fps`. Dry-run by default; `--apply` writes, backing
+up every replaced file to `<dataset>_pre_clean/` outside the dataset root, then
+re-checks the dataset and prints the verdict. No lerobot dependency.
+
+```bash
+tailor clean /data/ds            # dry-run: what would change, nothing written
+tailor clean /data/ds --apply    # repair + backup + automatic re-check
+```
+
 ## Configurable acceptance profiles
 
 What counts as acceptable differs per robot, task and training config. A
@@ -156,7 +169,7 @@ v0.1 acceptance suite shipped. Roadmap, in priority order:
 **Pipeline closure (v0.3+) — Cut/Sew/Re-check/Register:**
 
 - ~~`filter`~~ shipped (see above): explicit / rule-based / check-driven drops, dedupe, on official `delete_episodes`, auto re-check
-- `clean` commands (timestamp rebuild, stats recompute) on official `compute_stats`
+- ~~`clean`~~ shipped (see above): stats recompute + timestamp rebuild, dry-run first
 - YAML recipes (tracking upstream `recipe.py` direction rather than inventing a schema)
 - provenance ledger + registration
 

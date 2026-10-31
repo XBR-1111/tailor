@@ -1,5 +1,6 @@
 """CLI entry point: `tailor check <path>` runs the acceptance suite."""
 
+import json
 from pathlib import Path
 
 import typer
@@ -189,6 +190,89 @@ def filter_(
     new_snap = load_snapshot(out)
     recheck = run_all(new_snap)
     render_terminal(recheck, str(out))
+    raise typer.Exit(code=0)
+
+
+@app.command()
+def clean(
+    path: Path = typer.Argument(..., help="Path to a LeRobot-format dataset directory."),
+    apply: bool = typer.Option(  # noqa: A002
+        False, "--apply", help="Write the repairs (default is a dry-run that only reports)."
+    ),
+    no_stats: bool = typer.Option(False, "--no-stats", help="Skip stats recompute."),
+    no_timestamps: bool = typer.Option(False, "--no-timestamps", help="Skip timestamp rebuild."),
+) -> None:
+    """Deterministic repairs: recompute meta/stats.json, rebuild timestamps.
+
+    Dry-run by default — shows what would change. With --apply, every replaced
+    file is backed up to <dataset>_pre_clean/ outside the dataset root, then the
+    dataset is re-checked and the verdict printed.
+    """
+    snap = load_snapshot(path)
+    if not snap.readable:
+        console.print("[red]dataset unreadable[/red]")
+        raise typer.Exit(code=2)
+    from tailor.cleaning import apply_clean, rebuild_timestamps, recompute_stats
+
+    do_stats, do_ts = not no_stats, not no_timestamps
+    if not (do_stats or do_ts):
+        console.print("[red]nothing to do:[/red] both repairs disabled")
+        raise typer.Exit(code=2)
+
+    if not apply:
+        fps = float((snap.info or {}).get("fps", 0))
+        files, rows = rebuild_timestamps(snap, fps) if (do_ts and fps > 0) else ([], 0)
+        stats = snap.root / "meta" / "stats.json"
+        drift = None
+        if do_stats and stats.is_file():
+            fresh = recompute_stats(snap)
+            old = json.loads(stats.read_text())
+            import numpy as np
+
+            cols = [c for c in fresh if c in old and c not in ("timestamp",)]
+            diffs = []
+            for c in cols:
+                for stat in ("mean", "std"):
+                    a, b = np.asarray(old[c][stat], float), np.asarray(fresh[c][stat], float)
+                    scale = np.maximum(np.abs(a), 1e-9)
+                    d = float((np.abs(a - b) / scale).max())
+                    # below 0.1% is float round-trip noise, not drift
+                    if d > 1e-3:
+                        diffs.append((c, stat, d))
+            drift = diffs
+        console.print("[bold]dry-run — nothing written[/bold] (add --apply to repair)")
+        if do_stats:
+            if drift:
+                console.print(
+                    f"  stats: [yellow]{len(drift)} drifted stat(s) would be rewritten[/yellow]"
+                )
+                for c, stat, d in drift[:8]:
+                    console.print(f"    {c}.{stat}: {d:.1%} off")
+            else:
+                console.print("  stats: [green]already consistent[/green]")
+        if do_ts:
+            if files:
+                console.print(
+                    f"  timestamps: [yellow]{rows} row(s) in {len(files)} file(s) would be rebuilt"
+                )
+            else:
+                console.print("  timestamps: [green]already consistent[/green]")
+        raise typer.Exit(code=0)
+
+    report = apply_clean(snap, stats=do_stats, timestamps=do_ts)
+    if report.backup_dir:
+        console.print(f"[dim]backups: {report.backup_dir}[/dim]")
+    if report.stats_rewritten:
+        console.print("[green]stats.json rewritten[/green] from recomputed values")
+    if report.timestamp_files:
+        console.print(
+            f"[green]timestamps rebuilt[/green] in {len(report.timestamp_files)} file(s), "
+            f"{report.timestamp_rows} row(s) changed"
+        )
+
+    new_snap = load_snapshot(path)
+    recheck = run_all(new_snap)
+    render_terminal(recheck, str(path))
     raise typer.Exit(code=0)
 
 

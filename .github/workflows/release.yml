@@ -15,7 +15,7 @@ jobs:
       id-token: write
       contents: write  # create the GitHub Release from the changelog
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
       - run: uv build
       - uses: pypa/gh-action-pypi-publish@release/v1

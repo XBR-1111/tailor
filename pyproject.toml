@@ -45,7 +45,7 @@ dev = [
     "ruff>=0.15",
     "pytest>=8",
     "pytest-cov>=6",
-    "mypy>=1.14",
+    "mypy>=2.4.0",
     "pandas-stubs>=2",
     "types-PyYAML>=6",
 ]

@@ -32,10 +32,15 @@ def statuses(dataset: Path) -> dict[str, Status]:
 
 def test_clean_fixture_is_accepted(tmp_path: Path) -> None:
     st = statuses(make_fixture(tmp_path))
-    assert all(s == Status.PASS for s in st.values()), st
+    bad = {
+        n: s
+        for n, s in st.items()
+        if s != Status.PASS and not (n == "training_readiness" and s == Status.SKIP)
+    }
+    assert not bad, bad
     snap = load_snapshot(make_fixture(tmp_path))
     results = run_all(snap)
-    assert len(results) == 17
+    assert len(results) == 22
 
 
 def test_nan_is_caught(tmp_path: Path) -> None:
@@ -87,7 +92,13 @@ def test_cli_check_exit_codes(tmp_path: Path) -> None:
 @pytest.mark.parametrize("fmt", ["v2.1", "v3.0"])
 def test_clean_fixture_is_accepted_both_formats(tmp_path: Path, fmt: str) -> None:
     st = statuses(make_fixture(tmp_path, fmt=fmt))
-    assert all(s == Status.PASS for s in st.values()), st
+    # training_readiness SKIPs by design until chunk_size is configured
+    bad = {
+        n: s
+        for n, s in st.items()
+        if s != Status.PASS and not (n == "training_readiness" and s == Status.SKIP)
+    }
+    assert not bad, bad
 
 
 @pytest.mark.parametrize(
@@ -104,6 +115,9 @@ def test_clean_fixture_is_accepted_both_formats(tmp_path: Path, fmt: str) -> Non
         ("missing-video", "video_files"),
         ("video-mismatch", "video_streams"),
         ("zero-variance", "zero_variance"),
+        ("dropped-frames", "frame_continuity"),
+        ("duplicate-episode", "duplicate_episodes"),
+        ("portability-junk", "portability"),
     ],
 )
 @pytest.mark.parametrize("fmt", ["v2.1", "v3.0"])

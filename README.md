@@ -77,7 +77,7 @@ Any check can be remapped between WARN and FAIL. Unknown check names or keys
 in a profile fail fast with a clear error — a typo in your requirements must
 not silently keep a default you meant to change.
 
-## The 17 acceptance checks (v0.1)
+## The 22 acceptance checks (v0.1)
 
 | check | catches |
 | --- | --- |
@@ -98,6 +98,11 @@ not silently keep a default you meant to change.
 | video_streams | undecodable video; frame count vs episode lengths; resolution vs declared shape |
 | zero_variance | dims that never move (std < eps): normalization would divide by zero |
 | schema_consistency | column sets/dtypes drifting across episodes |
+| frame_continuity | dropped frames (row count vs declared length, frame_index holes) |
+| training_readiness | episodes shorter than your policy's chunk_size/horizon (configure to enable) |
+| portability | symlinks (break on transfer), stray files in data/, unexpected top-level entries |
+| duplicate_episodes | byte-identical state/action trajectories across episodes |
+| splits | overlapping episode ranges across declared splits (train/eval leakage) |
 
 Validated on a real 921 MB distributed dataset (`lerobot/unitreeh1_fold_clothes`,
 38 episodes / 19k frames / stereo video) plus deterministic synthetic fixtures
@@ -115,15 +120,9 @@ moment a sampler touches the last episode.
 
 v0.1 acceptance suite shipped. Roadmap, in priority order:
 
-**Accept depth (v0.2)** — close the check-category gap vs the ecosystem:
+**Accept depth (v0.2)** — remaining:
 
-- dropped frames, frame/index continuity
-- action quality: clipped (pegged at min/max), frozen (stuck), sudden jumps
-- training readiness: policy window compatibility, zero-std dims, delta_timestamps
-- portability: absolute paths, broken symlinks, HF Hub compatibility
-- duplicate episodes, train/eval split leakage
 - remote acceptance from a HF repo id (check metadata before downloading), zip archives
-- `--markdown` report for PRs/dataset cards, `--fail-on=warn`
 
 **Pipeline closure (v0.3+)** — Cut/Sew/Re-check/Register:
 

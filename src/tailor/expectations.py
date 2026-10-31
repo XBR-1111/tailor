@@ -566,6 +566,153 @@ def check_schema_consistency(snap: DatasetSnapshot, cfg: dict | None = None) -> 
     return _ok("schema_consistency")
 
 
+def check_frame_continuity(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if not snap.frames:
+        return _skip("frame_continuity", "no readable frames")
+    problems = []
+    declared = {ep.get("episode_index"): ep.get("length") for ep in (snap.episodes or [])}
+    for idx, df in sorted(snap.frames.items()):
+        n = len(df)
+        if idx in declared and declared[idx] is not None and n != declared[idx]:
+            problems.append((idx, f"{n} rows vs declared length {declared[idx]}"))
+            continue
+        if "frame_index" in df.columns:
+            fi = df["frame_index"].to_list()
+            holes = [i for i in range(len(fi)) if fi[i] != i]
+            if holes:
+                problems.append((idx, f"frame_index has holes (first at {holes[0]})"))
+    if problems:
+        return _fail(
+            "frame_continuity",
+            f"{len(problems)} continuity problem(s): dropped frames or row/length mismatch",
+            problems=problems[:10],
+        )
+    return _ok("frame_continuity")
+
+
+def check_training_readiness(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if snap.episodes is None:
+        return _skip("training_readiness", "episode metadata unreadable")
+    chunk_size = cfg.get("chunk_size")
+    if not chunk_size:
+        return _skip(
+            "training_readiness",
+            "configure training_readiness.chunk_size (your policy's action horizon) to enable",
+        )
+    lengths = [ep.get("length", 0) for ep in snap.episodes]
+    too_short = [
+        ep.get("episode_index") for ep in snap.episodes if ep.get("length", 0) <= chunk_size
+    ]
+    min_len = min(lengths) if lengths else 0
+    if too_short:
+        return _fail(
+            "training_readiness",
+            f"{len(too_short)} episode(s) shorter than chunk_size={chunk_size}+1; "
+            "ACT/diffusion sampling would crash or pad",
+            too_short=too_short[:10],
+            min_length=min_len,
+        )
+    return _ok("training_readiness", f"min episode length {min_len} > chunk_size {chunk_size}")
+
+
+def check_portability(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if not snap.root.is_dir():
+        return _skip("portability", "dataset root unreadable")
+    problems = []
+    warnings = []
+    # symlinks break on transfer (absolute targets die on every other machine)
+    for path in snap.root.rglob("*"):
+        if path.is_symlink():
+            problems.append(f"symlink: {path.relative_to(snap.root)}")
+    allowed_dirs = {"meta", "data", "videos"}
+    allowed_files = {
+        "README.md",
+        "LICENSE",
+        "LICENSE.txt",
+        "LICENSE.md",
+        ".gitattributes",
+        ".gitignore",
+    }
+    for entry in snap.root.iterdir():
+        if entry.is_dir() and entry.name not in allowed_dirs:
+            warnings.append(f"unexpected top-level dir: {entry.name}")
+        elif entry.is_file() and entry.name not in allowed_files:
+            warnings.append(f"unexpected top-level file: {entry.name}")
+    # stray files inside data/ break nothing but pollute uploads
+    for entry in (snap.root / "data").rglob("*") if (snap.root / "data").is_dir() else []:
+        if entry.is_file() and entry.suffix not in (".parquet",):
+            warnings.append(f"stray file in data/: {entry.relative_to(snap.root)}")
+    if problems:
+        return _fail(
+            "portability", f"{len(problems)} portability blocker(s)", problems=problems[:10]
+        )
+    if warnings:
+        return _warn("portability", f"{len(warnings)} unusual entr(y/ies)", warnings=warnings[:10])
+    return _ok("portability")
+
+
+def check_duplicate_episodes(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if len(snap.frames) < 2:
+        return _skip("duplicate_episodes", "need >=2 readable episodes")
+    import hashlib
+
+    hashes: dict[str, list[int]] = {}
+    for idx, df in sorted(snap.frames.items()):
+        cols = [c for c in ("observation.state", "action") if c in df.columns]
+        if not cols:
+            continue
+        import numpy as np
+
+        blob = b"".join(
+            np.ascontiguousarray(np.asarray(v, dtype=np.float64)).tobytes()
+            for c in cols
+            for v in df[c]
+        )
+        hashes.setdefault(hashlib.sha256(blob).hexdigest(), []).append(idx)
+    dupes = {h: eps for h, eps in hashes.items() if len(eps) > 1}
+    if dupes:
+        pairs = list(dupes.values())[:10]
+        return _warn(
+            "duplicate_episodes",
+            f"{len(dupes)} group(s) of byte-identical state/action trajectories",
+            groups=pairs,
+        )
+    return _ok("duplicate_episodes")
+
+
+def check_splits(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if snap.info is None:
+        return _skip("splits", "info.json unreadable")
+    splits = snap.info.get("splits") or {}
+    if len(splits) < 2:
+        return _ok("splits", "single split, no leakage possible")
+    # lerobot declares splits as "start:end" episode ranges
+    ranges = {}
+    for name, spec in splits.items():
+        if isinstance(spec, str) and ":" in spec:
+            try:
+                a, b = spec.split(":", 1)
+                ranges[name] = (int(a), int(b))
+            except ValueError:
+                return _fail("splits", f"unparseable split spec {name}={spec!r}")
+    overlaps = []
+    names = list(ranges)
+    for i, n1 in enumerate(names):
+        for n2 in names[i + 1 :]:
+            a1, b1 = ranges[n1]
+            a2, b2 = ranges[n2]
+            if max(a1, a2) < min(b1, b2):
+                overlaps.append((n1, n2))
+    if overlaps:
+        return _fail("splits", f"episode ranges overlap: {overlaps}", overlaps=overlaps)
+    return _ok("splits", f"{len(ranges)} disjoint splits")
+
+
 # Registry order is the report order.
 EXPECTATIONS: dict[str, Expectation] = {
     f.__name__.removeprefix("check_"): f
@@ -587,6 +734,11 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_video_streams,
         check_zero_variance,
         check_schema_consistency,
+        check_frame_continuity,
+        check_training_readiness,
+        check_portability,
+        check_duplicate_episodes,
+        check_splits,
     )
 }
 

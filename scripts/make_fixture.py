@@ -32,6 +32,9 @@ CORRUPTIONS = (
     "video-mismatch",  # video shard short by 5 frames vs episode lengths
     "zero-variance",  # state dim 0 frozen at a constant (dead sensor)
     "schema-drop",  # v2 only: episode 1 parquet loses the observation.state column
+    "dropped-frames",  # episode 0 loses frames 8-10: holes in frame_index, rows<length
+    "duplicate-episode",  # episode 2 copies episode 0's state/action trajectories
+    "portability-junk",  # stray debug.log in data/ + top-level notes.txt
 )
 
 
@@ -74,11 +77,19 @@ def make_v2(out: Path, corrupt: str | None) -> Path:
     (out / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
 
     total_frames = 0
+    ep0_df = None
     for ep in range(N_EPISODES):
         df = _trajectory(rng, ep, corrupt)
         df["index"] = np.arange(total_frames, total_frames + EP_LENGTH)
+        if ep == 0:
+            ep0_df = df
+        if corrupt == "duplicate-episode" and ep == 2 and ep0_df is not None:
+            df["observation.state"] = ep0_df["observation.state"]
+            df["action"] = ep0_df["action"]
         if corrupt == "schema-drop" and ep == 1:
             df = df.drop(columns=["observation.state"])
+        if corrupt == "dropped-frames" and ep == 0:
+            df = df.drop(index=[8, 9, 10]).reset_index(drop=True)
         df.to_parquet(out / "data" / "chunk-000" / f"episode_{ep:06d}.parquet", index=False)
         total_frames += EP_LENGTH
 
@@ -100,6 +111,9 @@ def make_v2(out: Path, corrupt: str | None) -> Path:
     _write_videos(out, "v2.1", corrupt)
     _write_videos(out, "v3.0", corrupt)
     _write_stats(out, corrupt)
+    if corrupt == "portability-junk":
+        (out / "data" / "chunk-000" / "debug.log").write_text("oops")
+        (out / "notes.txt").write_text("packing notes")
     return out
 
 
@@ -112,10 +126,16 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
     frames = []
     episodes_meta = []
     total_frames = 0
+    ep0_df = None
     for ep in range(N_EPISODES):
         df = _trajectory(rng, ep, corrupt)
         df["index"] = np.arange(total_frames, total_frames + EP_LENGTH)
         df["next.done"] = False
+        if ep == 0:
+            ep0_df = df
+        if corrupt == "duplicate-episode" and ep == 2 and ep0_df is not None:
+            df["observation.state"] = ep0_df["observation.state"]
+            df["action"] = ep0_df["action"]
         frames.append(df)
         # short-episode corrupts only the declared length, never the rows —
         # the mismatch stays inside metadata as in real broken datasets
@@ -138,9 +158,10 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
         )
         total_frames += EP_LENGTH
 
-    pd.concat(frames, ignore_index=True).to_parquet(
-        out / "data" / "chunk-000" / "file-000.parquet", index=False
-    )
+    shard = pd.concat(frames, ignore_index=True)
+    if corrupt == "dropped-frames":
+        shard = shard.drop(index=[8, 9, 10]).reset_index(drop=True)
+    shard.to_parquet(out / "data" / "chunk-000" / "file-000.parquet", index=False)
     pd.DataFrame(episodes_meta).to_parquet(
         out / "meta" / "episodes" / "chunk-000" / "file-000.parquet", index=False
     )
@@ -153,6 +174,9 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
     _write_videos(out, "v3.0", corrupt)
     _write_videos(out, "v3.0", corrupt)
     _write_stats(out, corrupt)
+    if corrupt == "portability-junk":
+        (out / "data" / "chunk-000" / "debug.log").write_text("oops")
+        (out / "notes.txt").write_text("packing notes")
     return out
 
 

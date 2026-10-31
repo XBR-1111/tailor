@@ -1046,6 +1046,58 @@ dataset = [
 ]
 
 [[package]]
+name = "lerobot-tailor"
+version = "0.6.0"
+source = { editable = "." }
+dependencies = [
+    { name = "av" },
+    { name = "huggingface-hub" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "typer" },
+]
+
+[package.optional-dependencies]
+lerobot = [
+    { name = "lerobot", extra = ["dataset"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pandas-stubs" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "types-pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "av", specifier = ">=12" },
+    { name = "huggingface-hub", specifier = ">=0.26" },
+    { name = "lerobot", extras = ["dataset"], marker = "extra == 'lerobot'", specifier = ">=0.6" },
+    { name = "pandas", specifier = ">=2" },
+    { name = "pyarrow", specifier = ">=15" },
+    { name = "pyyaml", specifier = ">=6" },
+    { name = "rich", specifier = ">=13" },
+    { name = "typer", specifier = ">=0.12" },
+]
+provides-extras = ["lerobot"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.14" },
+    { name = "pandas-stubs", specifier = ">=2" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-cov", specifier = ">=6" },
+    { name = "ruff", specifier = ">=0.15" },
+    { name = "types-pyyaml", specifier = ">=6" },
+]
+
+[[package]]
 name = "librt"
 version = "0.16.0"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -2269,58 +2321,6 @@ dependencies = [
 sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353, upload-time = "2025-04-27T18:04:59.103Z" },
-]
-
-[[package]]
-name = "tailor"
-version = "0.5.0"
-source = { editable = "." }
-dependencies = [
-    { name = "av" },
-    { name = "huggingface-hub" },
-    { name = "pandas" },
-    { name = "pyarrow" },
-    { name = "pyyaml" },
-    { name = "rich" },
-    { name = "typer" },
-]
-
-[package.optional-dependencies]
-lerobot = [
-    { name = "lerobot", extra = ["dataset"] },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pandas-stubs" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-    { name = "types-pyyaml" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "av", specifier = ">=12" },
-    { name = "huggingface-hub", specifier = ">=0.26" },
-    { name = "lerobot", extras = ["dataset"], marker = "extra == 'lerobot'", specifier = ">=0.6" },
-    { name = "pandas", specifier = ">=2" },
-    { name = "pyarrow", specifier = ">=15" },
-    { name = "pyyaml", specifier = ">=6" },
-    { name = "rich", specifier = ">=13" },
-    { name = "typer", specifier = ">=0.12" },
-]
-provides-extras = ["lerobot"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.14" },
-    { name = "pandas-stubs", specifier = ">=2" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "pytest-cov", specifier = ">=6" },
-    { name = "ruff", specifier = ">=0.15" },
-    { name = "types-pyyaml", specifier = ">=6" },
 ]
 
 [[package]]

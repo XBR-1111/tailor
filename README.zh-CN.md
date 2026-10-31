@@ -3,7 +3,7 @@
 **把分发来的机器人数据集精炼为可直接训练的数据。**
 
 [![CI](https://github.com/XBR-1111/tailor/actions/workflows/ci.yml/badge.svg)](https://github.com/XBR-1111/tailor/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![mypy](https://img.shields.io/badge/mypy-checked-blue)](https://mypy-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)

@@ -78,9 +78,12 @@ def recompute_stats(snap: DatasetSnapshot) -> dict:
     return out
 
 
-def rebuild_timestamps(snap: DatasetSnapshot, fps: float) -> tuple[list[Path], int]:
-    """timestamp := frame_index / fps inside each episode (the LeRobot definition).
-    Returns the rewritten files and the number of changed rows."""
+def detect_timestamp_changes(snap: DatasetSnapshot, fps: float) -> tuple[list[Path], int]:
+    """Which files/rows would change under a timestamp rebuild. Writes nothing.
+
+    Dry-runs must go through this, never through the writer: the whole point
+    of a dry-run is that disk state is untouched.
+    """
     changed_files: list[Path] = []
     changed_rows = 0
     for f in _data_files(snap):
@@ -91,17 +94,39 @@ def rebuild_timestamps(snap: DatasetSnapshot, fps: float) -> tuple[list[Path], i
         diff = (df["timestamp"].astype(float) - new_ts).abs() > 1e-6
         if not diff.any():
             continue
-        df["timestamp"] = new_ts
-        df.to_parquet(f, index=False)
         changed_files.append(f)
         changed_rows += int(diff.sum())
-    if changed_files:
+    return changed_files, changed_rows
+
+
+def _rewrite_timestamps(snap: DatasetSnapshot, fps: float, files: list[Path]) -> None:
+    """Write frame_index/fps timestamps into the given files (already detected).
+
+    Callers must back the files up BEFORE this — after the write the on-disk
+    original is gone.
+    """
+    for f in files:
+        df = pd.read_parquet(f)
+        df["timestamp"] = df["frame_index"].astype(float) / fps
+        df.to_parquet(f, index=False)
+    if files:
         # loader caches v2 episode frames; the rewrite must invalidate it or
         # same-process re-checks would judge stale data
         from tailor.loader import _read_v2_episode_frames
 
         _read_v2_episode_frames.cache_clear()
-    return changed_files, changed_rows
+
+
+def rebuild_timestamps(snap: DatasetSnapshot, fps: float) -> tuple[list[Path], int]:
+    """Detect + write in one call. Only for callers that own the backup step.
+
+    apply_clean does backup-then-write via detect + _rewrite_timestamps; this
+    convenience wrapper exists for programmatic use where detection and the
+    write happen in the same breath.
+    """
+    files, rows = detect_timestamp_changes(snap, fps)
+    _rewrite_timestamps(snap, fps, files)
+    return files, rows
 
 
 def apply_clean(snap: DatasetSnapshot, *, stats: bool, timestamps: bool) -> CleanReport:
@@ -128,9 +153,12 @@ def apply_clean(snap: DatasetSnapshot, *, stats: bool, timestamps: bool) -> Clea
     if timestamps:
         fps = float((snap.info or {}).get("fps", 0))
         if fps > 0:
-            files, rows = rebuild_timestamps(snap, fps)
+            # detect first, back up the ORIGINALS, then write — writing before
+            # the backup would archive the already-rewritten data
+            files, rows = detect_timestamp_changes(snap, fps)
             for f in files:
                 _backup(f)
+            _rewrite_timestamps(snap, fps, files)
             report.timestamp_files = files
             report.timestamp_rows = rows
     return report

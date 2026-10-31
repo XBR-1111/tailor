@@ -5,7 +5,7 @@ import json
 from rich.console import Console
 from rich.table import Table
 
-from tailor.model import CheckResult, Status
+from tailor.model import CheckResult, Status, summarize
 
 _STATUS_STYLE = {
     Status.PASS: "[green]PASS[/green]",
@@ -15,9 +15,18 @@ _STATUS_STYLE = {
 }
 
 
+def _counts(results: list[CheckResult]) -> tuple[int, int, int, int]:
+    """(fails, warns, passes, skips) — skips counted too: a meta-only run
+    shows 11 passed + 11 skipped, and hiding the skips makes '22 checks'
+    look like '11 checks'."""
+    fails, warns, passes = summarize(results)
+    skips = sum(r.status == Status.SKIP for r in results)
+    return fails, warns, passes, skips
+
+
 def render_terminal(results: list[CheckResult], dataset: str) -> None:
     console = Console()
-    fails, warns, passes = _counts(results)
+    fails, warns, passes, skips = _counts(results)
     table = Table(title=f"tailor — acceptance report: {dataset}", show_lines=False)
     table.add_column("check", style="bold")
     table.add_column("status", justify="center")
@@ -26,16 +35,24 @@ def render_terminal(results: list[CheckResult], dataset: str) -> None:
         table.add_row(r.name, _STATUS_STYLE[r.status], r.message)
     console.print(table)
     verdict = "[red]REJECTED[/red]" if fails else "[green]ACCEPTED[/green]"
-    console.print(f"{verdict}  ·  {passes} passed, {warns} warn, {fails} failed")
+    footer = f"{verdict}  ·  {passes} passed, {warns} warn, {fails} failed"
+    if skips:
+        footer += f", {skips} skipped"
+    console.print(footer)
 
 
 def render_json(results: list[CheckResult], dataset: str) -> str:
-    fails, warns, passes = _counts(results)
+    fails, warns, passes, skips = _counts(results)
     return json.dumps(
         {
             "dataset": dataset,
             "verdict": "rejected" if fails else "accepted",
-            "summary": {"passed": passes, "warn": warns, "failed": fails},
+            "summary": {
+                "passed": passes,
+                "warn": warns,
+                "failed": fails,
+                "skipped": skips,
+            },
             "checks": [
                 {
                     "name": r.name,
@@ -51,24 +68,20 @@ def render_json(results: list[CheckResult], dataset: str) -> str:
     )
 
 
-def _counts(results: list[CheckResult]) -> tuple[int, int, int]:
-    fails = sum(r.status == Status.FAIL for r in results)
-    warns = sum(r.status == Status.WARN for r in results)
-    passes = sum(r.status == Status.PASS for r in results)
-    return fails, warns, passes
-
-
 def render_markdown(results: list[CheckResult], dataset: str) -> str:
     """PR/dataset-card friendly report."""
-    fails, warns, passes = _counts(results)
+    fails, warns, passes, skips = _counts(results)
     verdict = "REJECTED" if fails else ("ACCEPTED WITH WARNINGS" if warns else "ACCEPTED")
     icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌", "SKIP": "➖"}
+    summary = f"{passes} passed, {warns} warn, {fails} failed"
+    if skips:
+        summary += f", {skips} skipped"
     lines = [
         "# tailor — acceptance report",
         "",
         f"**Dataset:** `{dataset}`",
         "",
-        f"**Verdict:** {verdict} — {passes} passed, {warns} warn, {fails} failed",
+        f"**Verdict:** {verdict} — {summary}",
         "",
         "| check | status | detail |",
         "| --- | --- | --- |",

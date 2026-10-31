@@ -8,9 +8,11 @@ The v0.1 suite targets distributed datasets ("does the package match the
 label"): format compliance, metadata-vs-data consistency, integrity.
 """
 
-import math
+import json
 from collections.abc import Callable
 from typing import Any
+
+import numpy as np
 
 from tailor.loader import SUPPORTED_VERSIONS, _episode_parquet_path
 from tailor.model import CheckResult, DatasetSnapshot, Status
@@ -41,6 +43,10 @@ def check_info_json(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResu
     return _ok("info_json")
 
 
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
 def check_codebase_version(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
     if snap.info is None:
@@ -52,8 +58,7 @@ def check_codebase_version(snap: DatasetSnapshot, cfg: dict | None = None) -> Ch
     if version not in allowed:
         return _fail(
             "codebase_version",
-            f"{version} not allowed by this profile (allowed: {', '.join(allowed)}); "
-            "v3.x is on the roadmap",
+            f"{version} not allowed by this profile (allowed: {', '.join(allowed)})",
             version=version,
         )
     return _ok("codebase_version", version)
@@ -187,7 +192,7 @@ def check_task_indices(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckR
             declared=declared,
             actual=total_tasks,
         )
-    return _ok("task_indices", f"{total_tasks} tasks")
+    return _ok("task_indices", _plural(total_tasks, "task"))
 
 
 def _feature_dim(info: dict, name: str) -> int | None:
@@ -204,6 +209,11 @@ def check_state_action_dims(snap: DatasetSnapshot, cfg: dict | None = None) -> C
         return _skip("state_action_dims", "no readable frames to compare against info.json")
     problems = []
     for idx, df in sorted(snap.frames.items()):
+        if len(df) == 0:
+            # a readable-but-empty episode parquet: iloc[0] below would raise,
+            # and an empty episode is itself a defect worth naming
+            problems.append((idx, "-", "empty episode file (0 rows)"))
+            continue
         for col, key in (("observation.state", "state"), ("action", "action")):
             declared = _feature_dim(snap.info, key)
             if col not in df.columns:
@@ -228,20 +238,13 @@ def check_nan_inf(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult
         return _skip("nan_inf", "no readable frames")
     bad = []
     for idx, df in sorted(snap.frames.items()):
+        if len(df) == 0:
+            continue
         for col in ("observation.state", "action"):
             if col not in df.columns:
                 continue
-            series = df[col].explode()
-
-            # numpy scalars are not python float; coerce first so np.float32
-            # values are judged by value, not by type
-            def _finite(v: Any) -> bool:
-                try:
-                    return math.isfinite(float(v))
-                except (TypeError, ValueError):
-                    return False
-
-            n_bad = int(series.map(lambda v: not _finite(v)).sum())
+            arr = np.stack([np.asarray(v, dtype=float) for v in df[col]])
+            n_bad = int((~np.isfinite(arr)).sum())
             if n_bad:
                 bad.append((idx, col, n_bad))
     if bad:
@@ -294,8 +297,6 @@ def check_timestamps(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRes
 
 def _declared_stats(snap: DatasetSnapshot) -> dict | None:
     """meta/stats.json if present (both v2.x and v3.0 keep it there)."""
-    import json
-
     path = snap.root / "meta" / "stats.json"
     if not path.is_file():
         return None
@@ -318,8 +319,6 @@ def check_stats_recompute(snap: DatasetSnapshot, cfg: dict | None = None) -> Che
         stats = declared.get(col)
         if not stats or col not in next(iter(snap.frames.values())).columns:
             continue
-        import numpy as np
-
         values = np.stack(
             [
                 np.asarray(v, dtype=float)
@@ -355,15 +354,22 @@ def check_action_quality(snap: DatasetSnapshot, cfg: dict | None = None) -> Chec
     jump_sigma = cfg.get("jump_sigma", 8)
     jump_ratio_max = cfg.get("jump_ratio", 0.01)
 
-    import numpy as np
+    # one read of stats.json for the whole check, not one per episode
+    action_stats = (_declared_stats(snap) or {}).get("action", {})
+    range_edges: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+    if "min" in action_stats and "max" in action_stats:
+        lo = np.asarray(action_stats["min"], dtype=float)
+        hi = np.asarray(action_stats["max"], dtype=float)
+        range_edges = (lo, hi, np.maximum(hi - lo, 1e-9))
 
-    findings: dict[str, str] = {}
+    frozen_eps: list[int] = []
+    frozen_best: dict[int, int] = {}
+    clipped_eps: list[int] = []
+    jump_eps: list[int] = []
     for idx, df in sorted(snap.frames.items()):
-        if "action" not in df.columns:
+        if "action" not in df.columns or len(df) < 2:
             continue
         actions = np.stack([np.asarray(v, dtype=float) for v in df["action"]])
-        if len(actions) < 2:
-            continue
         # frozen: longest run of identical consecutive action vectors
         same = (np.diff(actions, axis=0) == 0).all(axis=1)
         longest = 0
@@ -372,19 +378,16 @@ def check_action_quality(snap: DatasetSnapshot, cfg: dict | None = None) -> Chec
             run = run + 1 if flag else 0
             longest = max(longest, run)
         if longest >= frozen_frames:
-            findings.setdefault("frozen", f"episode {idx}: {longest} consecutive identical actions")
+            frozen_eps.append(idx)
+            frozen_best[idx] = longest
         # clipped: saturation shows as one dim STAYING at the declared range
         # edge, not as any single frame near it (smooth trajectories touch
         # edges naturally). Longest per-dim run within 1% of the declared
         # range (stats.json) must stay under clip_run frames. In-sample
         # min/max would flag extreme frames by construction, so no declared
         # stats means this sub-check is skipped.
-        declared = _declared_stats(snap)
-        action_stats = (declared or {}).get("action", {})
-        if "min" in action_stats and "max" in action_stats:
-            lo = np.asarray(action_stats["min"], dtype=float)
-            hi = np.asarray(action_stats["max"], dtype=float)
-            span = np.maximum(hi - lo, 1e-9)
+        if range_edges is not None:
+            lo, hi, span = range_edges
             at_edge = (actions <= lo + 0.01 * span) | (actions >= hi - 0.01 * span)
             for dim in range(at_edge.shape[1]):
                 run = best = 0
@@ -392,20 +395,35 @@ def check_action_quality(snap: DatasetSnapshot, cfg: dict | None = None) -> Chec
                     run = run + 1 if flag else 0
                     best = max(best, run)
                 if best >= clip_run:
-                    findings.setdefault(
-                        "clipped",
-                        f"episode {idx}: action dim {dim} pegged at range edge for {best} frames",
-                    )
+                    clipped_eps.append(idx)
                     break
         # jumps: fraction of frame-to-frame deltas beyond k sigma
         deltas = np.abs(np.diff(actions, axis=0))
         sigma = np.maximum(actions.std(axis=0), 1e-9)
         if (deltas > jump_sigma * sigma).any(axis=1).mean() > jump_ratio_max:
-            findings.setdefault(
-                "jumps", f"episode {idx}: sudden action jumps beyond {jump_sigma} sigma"
-            )
+            jump_eps.append(idx)
+
+    findings: list[str] = []
+    if frozen_eps:
+        findings.append(
+            f"frozen runs in {len(frozen_eps)} episode(s) "
+            f"(worst: ep{max(frozen_eps, key=lambda e: frozen_best[e])}, "
+            f"{max(frozen_best.values())} identical actions)"
+        )
+    if clipped_eps:
+        findings.append(f"range-edge pegging in {len(clipped_eps)} episode(s)")
+    if jump_eps:
+        findings.append(f"sudden jumps beyond {jump_sigma} sigma in {len(jump_eps)} episode(s)")
     if findings:
-        return _warn("action_quality", "; ".join(findings.values()), findings=list(findings))
+        episodes = sorted(set(frozen_eps) | set(clipped_eps) | set(jump_eps))
+        return _warn(
+            "action_quality",
+            "; ".join(findings),
+            findings=findings,
+            # 'episodes' drives --from-check: these are the episodes whose
+            # removal eliminates the finding
+            episodes=episodes,
+        )
     return _ok("action_quality")
 
 
@@ -468,6 +486,9 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     version = (snap.info or {}).get("codebase_version")
 
     def _probe(path):
+        # packet count == frame count only for CFR streams without B-frames;
+        # B-frame encodes may need decoded-frame counting (frame_tolerance
+        # absorbs the usual off-by-a-couple, not systematic differences)
         container = av.open(str(path))
         stream = container.streams.video[0]
         frames = sum(1 for p in container.demux(video=0) if p.dts is not None)
@@ -536,11 +557,11 @@ def check_zero_variance(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     eps = cfg.get("eps", 1e-6)
     flat = []
     for idx, df in sorted(snap.frames.items()):
+        if len(df) == 0:
+            continue
         for col in ("observation.state", "action"):
             if col not in df.columns:
                 continue
-            import numpy as np
-
             arr = np.stack([np.asarray(v, dtype=float) for v in df[col]])
             dead = np.where(arr.std(axis=0) < eps)[0].tolist()
             if dead:
@@ -678,21 +699,14 @@ def check_duplicate_episodes(snap: DatasetSnapshot, cfg: dict | None = None) -> 
     cfg = cfg or {}
     if len(snap.frames) < 2:
         return _skip("duplicate_episodes", "need >=2 readable episodes")
-    import hashlib
+
+    from tailor.filtering import trajectory_digest
 
     hashes: dict[str, list[int]] = {}
     for idx, df in sorted(snap.frames.items()):
-        cols = [c for c in ("observation.state", "action") if c in df.columns]
-        if not cols:
-            continue
-        import numpy as np
-
-        blob = b"".join(
-            np.ascontiguousarray(np.asarray(v, dtype=np.float64)).tobytes()
-            for c in cols
-            for v in df[c]
-        )
-        hashes.setdefault(hashlib.sha256(blob).hexdigest(), []).append(idx)
+        h = trajectory_digest(df)
+        if h is not None:
+            hashes.setdefault(h, []).append(idx)
     dupes = {h: eps for h, eps in hashes.items() if len(eps) > 1}
     if dupes:
         pairs = list(dupes.values())[:10]
@@ -769,13 +783,12 @@ EXPECTATIONS: dict[str, Expectation] = {
 
 def run_all(snap: DatasetSnapshot, profile: dict | None = None) -> list[CheckResult]:
     """Run every expectation; profile remaps severities per check."""
+    from tailor.profile import remap
+
     profile = profile or {}
     results = []
     for name, fn in EXPECTATIONS.items():
         cfg = profile.get(name, {})
         r = fn(snap, cfg)
-        target = cfg.get("severity")
-        if target and r.status in (Status.WARN, Status.FAIL):
-            r = CheckResult(r.name, Status(target), r.message, r.details)
-        results.append(r)
+        results.append(CheckResult(r.name, remap(r.status, cfg), r.message, r.details))
     return results

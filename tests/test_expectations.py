@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from tailor.expectations import run_all
+from tailor.filtering import collect_drops
 from tailor.loader import load_snapshot
 from tailor.model import Status
 
@@ -132,3 +133,26 @@ def test_schema_drop_is_caught_v2(tmp_path: Path) -> None:
     # schema corruption is v2-only in the fixture (v3 episodes share one shard)
     st = statuses(make_fixture(tmp_path, "schema-drop", fmt="v2.1"))
     assert st["schema_consistency"] == Status.FAIL
+
+
+def test_action_quality_attributes_episodes(tmp_path: Path) -> None:
+    """frozen-action corrupts episode 1; the check must name it in details
+    so --from-check can drop exactly that episode."""
+    st = statuses(make_fixture(tmp_path, "frozen-action"))
+    assert st["action_quality"] == Status.WARN
+    results = {r.name: r for r in run_all(load_snapshot(make_fixture(tmp_path, "frozen-action")))}
+    details = results["action_quality"].details
+    assert details.get("episodes") == [1]
+
+
+def test_from_check_drops_action_quality_episode(tmp_path: Path) -> None:
+    """The escalation promise: a WARN flagged with episode attribution must
+    be droppable via --from-check --drop-warn."""
+    ds = make_fixture(tmp_path, "frozen-action")
+    snap = load_snapshot(ds)
+    results = run_all(snap)
+    decision = collect_drops(snap, from_check=results, drop_warn=True)
+    assert 1 in decision.drop
+    assert "action_quality" in decision.drop[1][-1] or any(
+        "action_quality" in r for r in decision.drop[1]
+    )

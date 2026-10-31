@@ -79,3 +79,56 @@ def test_clean_cli_apply_fixes_and_rechecks(tmp_path: Path) -> None:
     assert backup.is_file()
     # and the dataset now passes its own stats check
     assert _status_of(ds, "stats_recompute") == Status.PASS
+
+
+def _dir_digest(root: Path) -> dict[str, bytes]:
+    import hashlib
+
+    out = {}
+    for f in sorted(root.rglob("*.parquet")):
+        out[str(f.relative_to(root))] = hashlib.sha256(f.read_bytes()).digest()
+    return out
+
+
+def test_dry_run_leaves_parquet_untouched(tmp_path: Path) -> None:
+    """The regression test for the dry-run-that-wrote bug: dup-timestamp is
+    the corruption whose clean path rewrites parquet, so a dry-run over it
+    must leave every parquet byte-identical."""
+    from typer.testing import CliRunner
+
+    from tailor.cli import app
+
+    ds = make_fixture(tmp_path, "dup-timestamp")
+    before = _dir_digest(ds / "data")
+    assert before, "fixture has parquet files"
+    runner = CliRunner()
+    result = runner.invoke(app, ["clean", str(ds)])
+    assert result.exit_code == 0
+    assert "dry-run" in result.stdout
+    assert _dir_digest(ds / "data") == before
+
+
+def test_apply_backs_up_originals_byte_equal(tmp_path: Path) -> None:
+    """The regression test for the backup-after-write bug: <dataset>_pre_clean
+    must contain the PRE-clean bytes, not the already-rewritten ones."""
+    import hashlib
+
+    from typer.testing import CliRunner
+
+    from tailor.cli import app
+
+    ds = make_fixture(tmp_path, "dup-timestamp")
+    originals = {
+        str(f.relative_to(ds)): hashlib.sha256(f.read_bytes()).digest()
+        for f in sorted((ds / "data").rglob("*.parquet"))
+    }
+    runner = CliRunner()
+    result = runner.invoke(app, ["clean", str(ds), "--apply"])
+    assert result.exit_code == 0
+    backup_dir = ds.parent / f"{ds.name}_pre_clean"
+    backed_up = {
+        str(f.relative_to(backup_dir)): hashlib.sha256(f.read_bytes()).digest()
+        for f in sorted(backup_dir.rglob("*.parquet"))
+    }
+    assert backed_up, "timestamp repairs must be backed up"
+    assert backed_up == {k: v for k, v in originals.items() if k in backed_up}

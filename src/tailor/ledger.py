@@ -21,14 +21,20 @@ def dataset_fingerprint(root: Path) -> str:
 
     Not cryptographic content hashing — the goal is to notice 'this is a
     different dataset' in milliseconds, not to prove byte-level provenance.
+    Video files are included: they carry most of the bytes, and clean/filter
+    both touch data whose only cheap signature is size.
     """
     h = hashlib.sha256()
     info_path = root / "meta" / "info.json"
     if info_path.is_file():
         h.update(info_path.read_bytes())
-    for f in sorted((root / "data").rglob("*.parquet")) if (root / "data").is_dir() else []:
-        st = f.stat()
-        h.update(f"{f.relative_to(root)}:{st.st_size};".encode())
+    for sub, pattern in (("data", "*.parquet"), ("videos", "*.mp4")):
+        base = root / sub
+        if not base.is_dir():
+            continue
+        for f in sorted(base.rglob(pattern)):
+            st = f.stat()
+            h.update(f"{f.relative_to(root)}:{st.st_size};".encode())
     return h.hexdigest()[:16]
 
 
@@ -43,8 +49,14 @@ def read_ledger(root: Path) -> list[dict]:
     events = []
     for line in p.read_text().splitlines():
         line = line.strip()
-        if line:
+        if not line:
+            continue
+        try:
             events.append(json.loads(line))
+        except json.JSONDecodeError:
+            # append-only, self-written: a torn tail line (crash mid-write)
+            # must not take the whole provenance view down with it
+            continue
     return events
 
 
@@ -76,10 +88,10 @@ def event_for_filter(
 def event_for_clean(report_stats: bool, report_ts_files: int, report_ts_rows: int) -> dict:
     ev: dict = {"op": "clean", "rewrote": []}
     if report_stats:
-        ev["rewrote"].append("meta/stats.json")
+        ev["rewrote"].append({"what": "meta/stats.json"})
     if report_ts_files:
         ev["rewrote"].append(
-            {"files": report_ts_files, "rows": report_ts_rows, "what": "timestamp"}
+            {"what": "timestamps", "files": report_ts_files, "rows": report_ts_rows}
         )
     return ev
 
@@ -101,7 +113,16 @@ def render_ledger(events: list[dict]) -> str:
             )
         elif ev.get("op") == "clean":
             what = ev.get("rewrote", [])
-            lines.append(f"{ts}  clean   rewrote {what}")
+            parts = []
+            for w in what:
+                if isinstance(w, dict):
+                    detail = w.get("what", "?")
+                    if w.get("files"):
+                        detail += f" ({w['files']} file(s), {w.get('rows', 0)} row(s))"
+                    parts.append(detail)
+                else:  # pre-0.6 events stored bare strings
+                    parts.append(str(w))
+            lines.append(f"{ts}  clean   rewrote [{', '.join(parts)}]")
         else:
             lines.append(f"{ts}  {ev.get('op', '?')}   {json.dumps(ev, ensure_ascii=False)[:120]}")
     return "\n".join(lines)

@@ -5,9 +5,33 @@ drop set with per-episode reasons. The actual dataset rewrite lives in the CLI
 layer behind the [lerobot] extra so the acceptance core stays dependency-free.
 """
 
+import hashlib
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+import numpy as np
 
 from tailor.model import CheckResult, DatasetSnapshot, Status
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+
+def trajectory_digest(df: "pd.DataFrame") -> str | None:
+    """Byte-level digest of one episode's state+action trajectory.
+
+    Shared by the duplicate_episodes check (Accept) and --dedupe (Cut) so the
+    two can never disagree about what counts as a duplicate. float64 coercion
+    first: identical trajectories stored as float32/float64 must hash equal,
+    and NaN bytes hash equal to NaN bytes (which is the desired identity here).
+    """
+    cols = [c for c in ("observation.state", "action") if c in df.columns]
+    if not cols:
+        return None
+    blob = b"".join(
+        np.ascontiguousarray(np.asarray(v, dtype=np.float64)).tobytes() for c in cols for v in df[c]
+    )
+    return hashlib.sha256(blob).hexdigest()
 
 
 @dataclass
@@ -21,12 +45,13 @@ class DropDecision:
 
 
 def parse_episode_list(spec: str) -> set[int]:
-    """'3,17,23' -> {3,17,23}; raises ValueError on junk."""
+    """'3,17,23' -> {3,17,23}; raises ValueError on junk (negatives included:
+    episode indices start at 0, a negative is always a typo)."""
     out = set()
     for part in spec.replace(" ", "").split(","):
         if not part:
             continue
-        if not part.lstrip("-").isdigit():
+        if not part.isdigit():
             raise ValueError(f"invalid episode index {part!r}")
         out.add(int(part))
     return out
@@ -62,21 +87,11 @@ def collect_drops(
     if dedupe:
         # duplicate episodes are detected by value: drop every later member of
         # each identical group, keep the first
-        import hashlib
-
         seen: dict[str, int] = {}
         for idx, df in sorted(snap.frames.items()):
-            cols = [c for c in ("observation.state", "action") if c in df.columns]
-            if not cols:
+            h = trajectory_digest(df)
+            if h is None:
                 continue
-            import numpy as np
-
-            blob = b"".join(
-                np.ascontiguousarray(np.asarray(v, dtype=np.float64)).tobytes()
-                for c in cols
-                for v in df[c]
-            )
-            h = hashlib.sha256(blob).hexdigest()
             if h in seen:
                 _drop(idx, f"duplicate of episode {seen[h]}")
             else:

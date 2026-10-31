@@ -63,6 +63,10 @@ def check(
     except (FileNotFoundError, NotADirectoryError) as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=2) from e
+    except Exception as e:  # HF/network errors are many and varied; keep the
+        # exit-code contract (2 = unreadable input) instead of a raw traceback
+        console.print(f"[red]input failed:[/red] {e}")
+        raise typer.Exit(code=2) from e
 
     prof = None
     if profile is not None:
@@ -146,17 +150,17 @@ def filter_(
         raise typer.Exit(code=2)
 
     explicit = parse_episode_list(drop_episodes) if drop_episodes else None
+    prof = None
+    if profile is not None:
+        from tailor.profile import ProfileError, load_profile
+
+        try:
+            prof = load_profile(profile)
+        except ProfileError as e:
+            console.print(f"[red]invalid profile:[/red] {e}")
+            raise typer.Exit(code=2) from e
     results = None
     if from_check:
-        prof = None
-        if profile is not None:
-            from tailor.profile import ProfileError, load_profile
-
-            try:
-                prof = load_profile(profile)
-            except ProfileError as e:
-                console.print(f"[red]invalid profile:[/red] {e}")
-                raise typer.Exit(code=2) from e
         results = run_all(snap, profile=prof)
 
     decision = collect_drops(
@@ -187,9 +191,10 @@ def filter_(
     _del(src, sorted(decision.drop), output_dir=str(out))
     console.print(f"[green]wrote[/green] {out}")
 
-    # Re-check stage: the product must pass acceptance again
+    # Re-check stage: the product must pass acceptance again — under the SAME
+    # profile that drove the drops, or the verdict answers a different question
     new_snap = load_snapshot(out)
-    recheck = run_all(new_snap)
+    recheck = run_all(new_snap, profile=prof)
     render_terminal(recheck, str(out))
     from tailor.ledger import append_event, event_for_filter
 
@@ -216,7 +221,7 @@ def clean(
     if not snap.readable:
         console.print("[red]dataset unreadable[/red]")
         raise typer.Exit(code=2)
-    from tailor.cleaning import apply_clean, rebuild_timestamps, recompute_stats
+    from tailor.cleaning import apply_clean, recompute_stats
 
     do_stats, do_ts = not no_stats, not no_timestamps
     if not (do_stats or do_ts):
@@ -225,7 +230,9 @@ def clean(
 
     if not apply:
         fps = float((snap.info or {}).get("fps", 0))
-        files, rows = rebuild_timestamps(snap, fps) if (do_ts and fps > 0) else ([], 0)
+        from tailor.cleaning import detect_timestamp_changes
+
+        files, rows = detect_timestamp_changes(snap, fps) if (do_ts and fps > 0) else ([], 0)
         stats = snap.root / "meta" / "stats.json"
         drift = None
         if do_stats and stats.is_file():
@@ -240,7 +247,12 @@ def clean(
                     a, b = np.asarray(old[c][stat], float), np.asarray(fresh[c][stat], float)
                     scale = np.maximum(np.abs(a), 1e-9)
                     d = float((np.abs(a - b) / scale).max())
-                    # below 0.1% is float round-trip noise, not drift
+                    # 0.1% is float round-trip noise, not drift. Note this is
+                    # the "would rewriting change anything" bar — the
+                    # stats_recompute CHECK judges quality against its own
+                    # mean_tolerance (default 5%), so a dataset can sit between
+                    # the two: clean sees nothing worth rewriting, check flags
+                    # drift. Different questions, different bars.
                     if d > 1e-3:
                         diffs.append((c, stat, d))
             drift = diffs
@@ -253,7 +265,10 @@ def clean(
                 for c, stat, d in drift[:8]:
                     console.print(f"    {c}.{stat}: {d:.1%} off")
             else:
-                console.print("  stats: [green]already consistent[/green]")
+                console.print(
+                    "  stats: [green]no drift above 0.1%[/green] "
+                    "(round-trip noise floor — rewriting would not change anything real)"
+                )
         if do_ts:
             if files:
                 console.print(

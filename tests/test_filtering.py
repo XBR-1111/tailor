@@ -64,3 +64,10 @@ def test_render_decision_lists_reasons(tmp_path: Path) -> None:
     d = collect_drops(snap, explicit={1})
     text = render_decision(d, 3)
     assert "drop ep 1" in text and "explicit" in text
+
+
+def test_parse_episode_list_rejects_negative() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        parse_episode_list("3,-7,12")

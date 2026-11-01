@@ -6,7 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-### Fixed (unreleased) — found by validating against real v2.1 datasets
+## [0.9.0] — 2026-11-01
+
+### Fixed — found by validating against real v2.x datasets
 - **v2.x video layout was wrong**: checks expected `videos/{key}/chunk-XXX/…`
   but the official v2.0/v2.1 template (verified on lerobot/pusht@v2.1) is
   `videos/chunk-XXX/{key}/…` — every v2.1 dataset misreported ALL video files
@@ -17,7 +19,7 @@ All notable changes to this project are documented here. The format follows
 - (with the repo@ref feature) local paths win before '@' splitting — a cache
   dir literally named `repo__name@v2.1` is a path, not a ref spec.
 
-### Added (unreleased)
+### Added
 - `repo@ref` addressing: `tailor check lerobot/pusht@v2.1` checks a specific
   format-version ref (LeRobot datasets tag each version; main is always the
   latest). Ref-aware cache dirs — v2.1 and v3.0 of one repo never collide.
@@ -35,6 +37,9 @@ All notable changes to this project are documented here. The format follows
   per-episode/per-file instead of concatenating whole columns — peak
   memory O(one episode/file) instead of O(dataset), removing the OOM
   ceiling on million-frame recomputes.
+- `clean --apply` on a dataset without meta/stats.json now CREATES it from
+  recomputation (was: crash on backing up a nonexistent file). Dry-run
+  reports the missing file honestly instead of "no drift".
 
 ## [0.8.1] — 2026-11-01
 

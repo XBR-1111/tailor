@@ -54,8 +54,7 @@ ACCEPTED  ·  11 passed, 0 warn, 0 failed  ·  11 skipped (meta-only run)
 ```
 
 远程模式默认只拉 `meta/*`（几 MB、数秒）跑所有元数据级检查——依赖数据文件的
-检查会诚实 SKIP，不假报 FAIL。`HF_ENDPOINT` 环境变量生效（镜像可用）；下载缓存在
-`~/.cache/tailor-hf/`。
+检查会诚实 SKIP，不假报 FAIL。下载缓存在 `~/.cache/tailor-hf/`。
 
 退出码让它可以直接当 CI 门禁用：**0** 收货 · **1** 拒收 · **2** 不可读（`--fail-on-warn`
 让 WARN 也以 1 退出）。`--json` 输出机器可读结果；`--markdown report.md` 写出可贴
@@ -120,7 +119,7 @@ workflow，你的流水线一行就能对数据集设门禁：
 # your-repo/.github/workflows/dataset-quality.yml
 jobs:
   check-dataset:
-    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.8.1
+    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.9.0
     with:
       dataset: lerobot/unitreeh1_fold_clothes   # HF repo id、本地路径或 .zip
       fail-on-warn: false

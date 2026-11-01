@@ -151,3 +151,34 @@ def test_running_stats_matches_numpy(tmp_path: Path) -> None:
     assert np.allclose(running.min, full.min(axis=0))
     assert np.allclose(running.max, full.max(axis=0))
     assert running.count.tolist() == [1500] * 7
+
+
+def test_apply_creates_missing_stats_json(tmp_path: Path) -> None:
+    """A dataset without meta/stats.json: --apply must CREATE it (backing up
+    nothing, since there is no original) instead of crashing on copy2."""
+
+    from typer.testing import CliRunner
+
+    from tailor.cli import app
+
+    ds = make_fixture(tmp_path / "ds")
+    (ds / "meta" / "stats.json").unlink()
+    runner = CliRunner()
+    result = runner.invoke(app, ["clean", str(ds), "--apply"])
+    assert result.exit_code == 0, result.output
+    assert (ds / "meta" / "stats.json").is_file()
+    # re-check passes with the fresh stats
+    assert _status_of(ds, "stats_recompute") == Status.PASS
+
+
+def test_dryrun_reports_missing_stats_honestly(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from tailor.cli import app
+
+    ds = make_fixture(tmp_path / "ds")
+    (ds / "meta" / "stats.json").unlink()
+    result = CliRunner().invoke(app, ["clean", str(ds)])
+    assert result.exit_code == 0
+    assert "missing" in result.stdout
+    assert "--apply would create it" in result.stdout

@@ -247,6 +247,7 @@ def clean(
         files, rows = detect_timestamp_changes(snap, fps) if (do_ts and fps > 0) else ([], 0)
         stats = snap.root / "meta" / "stats.json"
         drift = None
+        stats_missing = do_stats and not stats.is_file()
         if do_stats and stats.is_file():
             fresh = recompute_stats(snap)
             old = json.loads(stats.read_text())
@@ -269,7 +270,12 @@ def clean(
                         diffs.append((c, stat, d))
             drift = diffs
         console.print("[bold]dry-run — nothing written[/bold] (add --apply to repair)")
-        if do_stats:
+        if stats_missing:
+            console.print(
+                "  stats: [yellow]meta/stats.json missing — --apply would create it"
+                " from recomputation[/yellow]"
+            )
+        elif do_stats:
             if drift:
                 console.print(
                     f"  stats: [yellow]{len(drift)} drifted stat(s) would be rewritten[/yellow]"

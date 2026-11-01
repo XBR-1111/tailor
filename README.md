@@ -55,8 +55,7 @@ ACCEPTED  ·  11 passed, 0 warn, 0 failed  ·  11 skipped (meta-only run)
 
 Remote mode pulls only `meta/*` by default (seconds, a few MB) and runs every
 metadata-level check — file-presence checks SKIP honestly instead of faking a
-FAIL. `HF_ENDPOINT` is respected (mirrors work); downloads cache under
-`~/.cache/tailor-hf/`.
+FAIL. Downloads cache under `~/.cache/tailor-hf/`.
 
 Exit codes make it a CI gate: **0** accepted · **1** rejected · **2** unreadable
 (`--fail-on-warn` makes WARN exit 1 too). `--json` emits machine-readable output,
@@ -128,7 +127,7 @@ this repo — one line gates a dataset in your pipeline:
 # your-repo/.github/workflows/dataset-quality.yml
 jobs:
   check-dataset:
-    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.8.1
+    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.9.0
     with:
       dataset: lerobot/unitreeh1_fold_clothes   # HF repo id, local path, or .zip
       fail-on-warn: false

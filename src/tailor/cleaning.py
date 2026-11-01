@@ -149,7 +149,8 @@ def apply_clean(snap: DatasetSnapshot, *, stats: bool, timestamps: bool) -> Clea
 
     if stats:
         p = _stats_path(snap)
-        _backup(p)
+        if p.is_file():
+            _backup(p)  # a missing stats.json has no original to back up
         p.write_text(json.dumps(recompute_stats(snap), indent=2))
         report.stats_rewritten = True
     if timestamps:

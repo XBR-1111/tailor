@@ -80,6 +80,14 @@ def load_profile(path: Path) -> dict:
                         f"checks.{name}.severity must be WARN or FAIL, got {value!r}"
                     )
                 merged["severity"] = sev
+            elif key == "enabled":
+                # orthogonal to severity: a disabled check is not run at all
+                # (its SKIP row names the profile as the reason)
+                if not isinstance(value, bool):
+                    raise ProfileError(
+                        f"checks.{name}.enabled must be true or false, got {value!r}"
+                    )
+                merged["enabled"] = value
             elif key not in defaults:
                 raise ProfileError(f"checks.{name} has no configurable key '{key}'")
             else:

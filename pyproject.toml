@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lerobot-tailor"
-version = "0.7.0"
+version = "0.8.0"
 description = "Refine distributed robot datasets into training-ready data: acceptance checks, episode-level filtering, deterministic cleaning, provenance."
 readme = "README.md"
 license = "Apache-2.0"

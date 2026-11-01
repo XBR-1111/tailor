@@ -795,13 +795,20 @@ EXPECTATIONS: dict[str, Expectation] = {
 
 
 def run_all(snap: DatasetSnapshot, profile: dict | None = None) -> list[CheckResult]:
-    """Run every expectation; profile remaps severities per check."""
+    """Run every expectation; profile remaps severities per check.
+
+    A check disabled via `enabled: false` is not executed at all — it reports
+    SKIP naming the profile, and contributes no episodes to --from-check.
+    """
     from tailor.profile import remap
 
     profile = profile or {}
     results = []
     for name, fn in EXPECTATIONS.items():
         cfg = profile.get(name, {})
+        if cfg.get("enabled") is False:
+            results.append(_skip(name, "disabled by profile"))
+            continue
         r = fn(snap, cfg)
         results.append(CheckResult(r.name, remap(r.status, cfg), r.message, r.details))
     return results

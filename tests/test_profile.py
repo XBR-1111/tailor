@@ -92,3 +92,37 @@ def test_frozen_threshold_override(tmp_path: Path) -> None:
     assert results["action_quality"].status == Status.PASS
     default_results = {r.name: r for r in run_all(snap)}
     assert default_results["action_quality"].status == Status.WARN
+
+
+def test_enabled_false_disables_check(tmp_path) -> None:
+    """A disabled check is not executed: a corruption it would catch turns to SKIP."""
+    from tailor.expectations import run_all
+    from tailor.loader import load_snapshot
+    from tailor.model import Status
+    from test_expectations import make_fixture
+
+    prof_file = tmp_path / "p.yaml"
+    prof_file.write_text("checks:\n  nan_inf:\n    enabled: false\n")
+    ds = make_fixture(tmp_path / "ds", "nan")  # nan corruption -> nan_inf FAIL
+    prof = load_profile(prof_file)
+    results = {r.name: r for r in run_all(load_snapshot(ds), profile=prof)}
+    assert results["nan_inf"].status == Status.SKIP
+    assert "disabled by profile" in results["nan_inf"].message
+    # and a sibling check still runs
+    assert results["info_json"].status == Status.PASS
+
+
+def test_enabled_must_be_bool(tmp_path) -> None:
+    import pytest
+
+    prof_file = tmp_path / "p.yaml"
+    prof_file.write_text("checks:\n  fps:\n    enabled: yes-please\n")
+    with pytest.raises(ProfileError, match="enabled"):
+        load_profile(prof_file)
+
+
+def test_enabled_true_is_default_behaviour(tmp_path) -> None:
+    prof_file = tmp_path / "p.yaml"
+    prof_file.write_text("checks:\n  fps:\n    enabled: true\n")
+    prof = load_profile(prof_file)
+    assert prof["fps"].get("enabled") is True

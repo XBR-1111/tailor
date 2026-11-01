@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-01
+
+### Added
+- `enabled: false` in a profile switches a check off entirely: it is not
+  executed, reports SKIP naming the profile, and contributes no episodes to
+  `--from-check`. Orthogonal to severity remapping; non-boolean values are
+  rejected loudly like every other profile key.
+
 ## [0.7.0] — 2026-11-01
 
 ### Changed

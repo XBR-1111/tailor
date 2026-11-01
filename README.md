@@ -140,9 +140,12 @@ checks:
 tailor check /data/dataset --profile my_requirements.yaml
 ```
 
-Any check can be remapped between WARN and FAIL. Unknown check names or keys
-in a profile fail fast with a clear error — a typo in your requirements must
-not silently keep a default you meant to change.
+Any check can be remapped between WARN and FAIL, and any check can be
+switched off entirely with `enabled: false` (it reports SKIP naming the
+profile, is not executed, and contributes nothing to `--from-check`).
+Unknown check names or keys in a profile fail fast with a clear error — a
+typo in your requirements must not silently keep a default you meant to
+change.
 
 ## The 22 acceptance checks (v0.1)
 

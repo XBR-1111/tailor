@@ -134,7 +134,9 @@ checks:
 tailor check /data/dataset --profile my_requirements.yaml
 ```
 
-任意检查项的 WARN/FAIL 可以互相重映射。profile 里出现未知的检查名或
+任意检查项的 WARN/FAIL 可以互相重映射；任意检查项也可以用
+`enabled: false` 整体关掉（显示为 SKIP 并注明来自 profile——不执行，
+也不会给 `--from-check` 贡献任何 episode）。profile 里出现未知的检查名或
 配置键会立刻报错——需求文件里的 typo 不能静默地保留一个你想改掉的默认值。
 
 ## 22 条验收检查（v0.1）

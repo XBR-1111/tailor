@@ -68,5 +68,14 @@ is at least MINOR-worthy on its own; a batch of "won't change your life"
 items is a PATCH. Performance work with no new behaviour is a PATCH even
 when it took effort — effort is not a version signal.
 
-Procedure: bump `pyproject.toml`, add the CHANGELOG section, then
-`git tag vX.Y.Z && git push origin vX.Y.Z` — Trusted Publishing does the rest.
+Procedure: bump `pyproject.toml`, add the CHANGELOG section, then walk the
+release checklist, then `git tag vX.Y.Z && git push origin vX.Y.Z` —
+Trusted Publishing does the rest.
+
+Release checklist (in order, before tagging):
+
+1. For each CHANGELOG entry in this release, classify it against the table
+   above — MINOR-worthy and PATCH-worthy items must not share a release.
+   If they do, split the tag or defer the MINOR items to Unreleased.
+2. Confirm the section heading version matches `pyproject.toml`.
+3. Confirm tests/lint/mypy are green on the commit being tagged.

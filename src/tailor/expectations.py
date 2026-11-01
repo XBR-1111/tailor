@@ -330,24 +330,27 @@ def check_stats_recompute(snap: DatasetSnapshot, cfg: dict | None = None) -> Che
     if declared is None:
         return _skip("stats_recompute", "meta/stats.json missing (informational)")
     mean_tol = cfg.get("mean_tolerance", 0.05)
+    from tailor.stats import RunningStats
+
     drift_report = []
     for col in ("observation.state", "action"):
         stats = declared.get(col)
         if not stats or col not in next(iter(snap.frames.values())).columns:
             continue
-        arrays = [a for a in (snap.col_array(idx, col) for idx in snap.frames) if a is not None]
-        if not arrays:
-            continue
-        values = np.concatenate(arrays, axis=0) if len(arrays) > 1 else arrays[0]
-        for stat, actual in (
-            ("mean", values.mean(axis=0)),
-            ("std", values.std(axis=0)),
+        running = RunningStats()
+        for idx in snap.frames:
+            arr = snap.col_array(idx, col)
+            if arr is not None:
+                running.update(arr)  # O(one episode) memory, never concatenates
+        for stat_name, actual in (
+            ("mean", running.mean),
+            ("std", running.std),
         ):
-            decl = np.asarray(stats[stat], dtype=float)
+            decl = np.asarray(stats[stat_name], dtype=float)
             scale = np.maximum(np.abs(decl), 1e-9)
             drift = float((np.abs(decl - actual) / scale).max())
             if drift > mean_tol:
-                drift_report.append((col, stat, round(drift, 4)))
+                drift_report.append((col, stat_name, round(drift, 4)))
     if drift_report:
         return _fail(
             "stats_recompute",
@@ -764,6 +767,56 @@ def check_splits(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     return _ok("splits", f"{len(ranges)} disjoint splits")
 
 
+def check_video_sync(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    """Cross-camera time alignment (v3.0 metadata level).
+
+    v3 episodes carry per-video-key from/to timestamps; stereo rigs that
+    drifted (no hardware sync) show up as differing spans across keys.
+    v2.x cuts one video per episode with no per-camera timestamps in
+    metadata — nothing to compare without decoding, so SKIP.
+    """
+    cfg = cfg or {}
+    if snap.info is None or snap.episodes is None:
+        return _skip("video_sync", "info.json or episode metadata unreadable")
+    version = (snap.info or {}).get("codebase_version")
+    if version != "v3.0":
+        return _skip(
+            "video_sync",
+            "v2.x stores no per-camera timestamps in metadata (videos are cut per episode)",
+        )
+    keys = _video_keys(snap.info)
+    if len(keys) < 2:
+        return _ok("video_sync", "single video stream, nothing to sync")
+    tolerance = cfg.get("tolerance", 0.05)
+    problems: list[tuple] = []
+    for ep in snap.episodes:
+        idx = ep.get("episode_index")
+        spans = {}
+        for key in keys:
+            t0 = ep.get(f"videos/{key}/from_timestamp")
+            t1 = ep.get(f"videos/{key}/to_timestamp")
+            if t0 is None or t1 is None:
+                problems.append((idx, key, "missing camera timestamps"))
+                continue
+            spans[key] = (float(t0), float(t1))
+        if len(spans) < 2:
+            continue
+        starts = [v[0] for v in spans.values()]
+        ends = [v[1] for v in spans.values()]
+        spread = max(max(starts) - min(starts), max(ends) - min(ends))
+        if spread > tolerance:
+            problems.append((idx, f"camera spans drift {spread:.3f}s > {tolerance:.3f}s"))
+    if problems:
+        episodes = sorted({p[0] for p in problems if isinstance(p[0], int)})
+        return _warn(
+            "video_sync",
+            f"{len(problems)} episode(s) with cross-camera time drift > {tolerance:.3f}s",
+            problems=problems[:10],
+            episodes=episodes,
+        )
+    return _ok("video_sync", f"{len(keys)} cameras aligned within {tolerance:.3f}s")
+
+
 # Registry order is the report order.
 EXPECTATIONS: dict[str, Expectation] = {
     f.__name__.removeprefix("check_"): f
@@ -783,6 +836,7 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_action_quality,
         check_video_files,
         check_video_streams,
+        check_video_sync,
         check_zero_variance,
         check_schema_consistency,
         check_frame_continuity,

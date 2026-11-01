@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added (unreleased)
+- `video_sync` check: cross-camera from/to timestamp drift per episode
+  (v3.0 metadata level; v2.x SKIPs — no per-camera timestamps to compare).
+  `tolerance` configurable, default 50ms; WARN with episode attribution.
+- `tailor.stats.RunningStats`: numerically stable streaming stats
+  (Chan et al. merge). stats_recompute and clean's recompute now fold
+  per-episode/per-file instead of concatenating whole columns — peak
+  memory O(one episode/file) instead of O(dataset), removing the OOM
+  ceiling on million-frame recomputes.
+
 ## [0.8.0] — 2026-11-01
 
 ### Added

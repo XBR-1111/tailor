@@ -31,7 +31,7 @@ pip install lerobot-tailor
 tailor check /path/to/lerobot/dataset
 tailor check dataset.zip                # zip 归档（自动剥掉包裹层目录）
 tailor check lerobot/unitreeh1_fold_clothes   # HF repo id：meta 预检，不下载全量
-tailor check lerobot/... --full               # 下载全部，跑满 22 条检查
+tailor check lerobot/... --full               # 下载全部，跑满 23 条检查
 ```
 
 ```
@@ -139,7 +139,7 @@ tailor check /data/dataset --profile my_requirements.yaml
 也不会给 `--from-check` 贡献任何 episode）。profile 里出现未知的检查名或
 配置键会立刻报错——需求文件里的 typo 不能静默地保留一个你想改掉的默认值。
 
-## 22 条验收检查（v0.1）
+## 23 条验收检查
 
 | 检查项 | 抓什么问题 |
 | --- | --- |
@@ -158,6 +158,7 @@ tailor check /data/dataset --profile my_requirements.yaml
 | action_quality | frozen（连续相同 action）；某一 action 维持续钉在声明范围边界；超过 k·σ 的突变跳变 |
 | video_files | 声明的视频流在磁盘上缺失（v2 按每集文件、v3 按分片指针查） |
 | video_streams | 视频不可解码；帧数与 episode 长度不符；分辨率与声明 shape 不符 |
+| video_sync | 同一 episode 内多相机 from/to 时间戳漂移（v3.0 元数据级；无硬件同步的相机组） |
 | zero_variance | 永不变化的维度（std < eps）：归一化会除零 |
 | schema_consistency | 跨 episode 的列集/dtype 漂移 |
 | frame_continuity | 丢帧（行数 vs 声明长度、frame_index 有洞） |

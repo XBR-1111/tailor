@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from tailor.model import DatasetSnapshot
+from tailor.stats import RunningStats
 
 _NUMERIC_COLS = (
     "observation.state",
@@ -47,7 +48,11 @@ def _data_files(snap: DatasetSnapshot) -> list[Path]:
 
 def recompute_stats(snap: DatasetSnapshot) -> dict:
     """Fresh stats over every numeric parquet column; video keys preserved
-    from the previous stats.json (pixel stats need full decode — out of scope)."""
+    from the previous stats.json (pixel stats need full decode — out of scope).
+
+    One file is in memory at a time; per-file results fold into RunningStats
+    (Chan et al. merge), so peak memory is O(one file) instead of O(dataset).
+    """
     old = {}
     p = _stats_path(snap)
     if p.is_file():
@@ -56,24 +61,21 @@ def recompute_stats(snap: DatasetSnapshot) -> dict:
         k for k, f in (snap.info or {}).get("features", {}).items() if f.get("dtype") == "video"
     ]
     out: dict = {k: old[k] for k in video_keys if k in old}
-    for col in _NUMERIC_COLS:
-        rows = [
-            np.asarray(v, dtype=float)
-            for f in _data_files(snap)
-            for df in [pd.read_parquet(f)]
-            if col in df.columns
-            for v in df[col]
-        ]
-        if not rows:
-            continue
-        arr = np.stack(rows)
-        dims = 1 if arr.ndim == 1 else arr.shape[1]
+    running: dict[str, RunningStats] = {}
+    for f in _data_files(snap):
+        df = pd.read_parquet(f)
+        for col in _NUMERIC_COLS:
+            if col not in df.columns or len(df) == 0:
+                continue
+            arr = np.stack([np.asarray(v, dtype=float) for v in df[col]])
+            running.setdefault(col, RunningStats()).update(arr)
+    for col, r in running.items():
         out[col] = {
-            "min": arr.min(axis=0).tolist(),
-            "max": arr.max(axis=0).tolist(),
-            "mean": arr.mean(axis=0).tolist(),
-            "std": arr.std(axis=0).tolist(),
-            "count": [int(arr.shape[0])] * dims,
+            "min": r.min.tolist(),
+            "max": r.max.tolist(),
+            "mean": r.mean.tolist(),
+            "std": r.std.tolist(),
+            "count": [int(c) for c in r.count],
         }
     return out
 

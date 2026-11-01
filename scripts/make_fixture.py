@@ -43,6 +43,7 @@ CORRUPTIONS = (
     "dropped-frames",  # episode 0 loses frames 8-10: holes in frame_index, rows<length
     "duplicate-episode",  # episode 2 copies episode 0's state/action trajectories
     "portability-junk",  # stray debug.log in data/ + top-level notes.txt
+    "video-desync",  # v3 only: second camera's to_timestamp drifts 0.3s in ep 1
 )
 
 
@@ -162,6 +163,17 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
                 f"videos/{VIDEO_KEY}/file_index": 0,
                 f"videos/{VIDEO_KEY}/from_timestamp": t0,
                 f"videos/{VIDEO_KEY}/to_timestamp": t1,
+                **(
+                    {
+                        f"videos/{WRIST_KEY}/chunk_index": 0,
+                        f"videos/{WRIST_KEY}/file_index": 0,
+                        f"videos/{WRIST_KEY}/from_timestamp": t0,
+                        # ep 1 drifts 0.3s: the desync the video_sync check catches
+                        f"videos/{WRIST_KEY}/to_timestamp": t1 + (0.3 if ep == 1 else 0.0),
+                    }
+                    if corrupt == "video-desync"
+                    else {}
+                ),
                 "tasks": ["pick up the cube"],
                 "length": length,
             }
@@ -191,6 +203,7 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
 
 
 VIDEO_KEY = "observation.images.top"
+WRIST_KEY = "observation.images.wrist"  # only declared under video-desync
 VIDEO_SIZE = 64
 
 
@@ -229,6 +242,12 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
         encode(vdir / "file-000.mp4", N_EPISODES * EP_LENGTH - short)
         if corrupt == "missing-video":
             (vdir / "file-000.mp4").unlink()
+        if corrupt == "video-desync":
+            # wrist camera video is well-formed; only its METADATA timestamps
+            # drift, so video_streams stays green and video_sync alone catches it
+            wdir = out / "videos" / WRIST_KEY / "chunk-000"
+            wdir.mkdir(parents=True, exist_ok=True)
+            encode(wdir / "file-000.mp4", N_EPISODES * EP_LENGTH)
 
 
 def _write_stats(out: Path, corrupt: str | None) -> None:
@@ -286,6 +305,17 @@ def _write_info(meta: Path, fmt: str, corrupt: str | None, total_frames: int) ->
                         "shape": [VIDEO_SIZE, VIDEO_SIZE, 3],
                         "names": ["height", "width", "channel"],
                     },
+                    **(
+                        {
+                            WRIST_KEY: {
+                                "dtype": "video",
+                                "shape": [VIDEO_SIZE, VIDEO_SIZE, 3],
+                                "names": ["height", "width", "channel"],
+                            }
+                        }
+                        if corrupt == "video-desync"
+                        else {}
+                    ),
                     "timestamp": {"dtype": "float32", "shape": [1]},
                     "frame_index": {"dtype": "int64", "shape": [1]},
                     "episode_index": {"dtype": "int64", "shape": [1]},

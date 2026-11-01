@@ -147,7 +147,7 @@ Unknown check names or keys in a profile fail fast with a clear error — a
 typo in your requirements must not silently keep a default you meant to
 change.
 
-## The 22 acceptance checks (v0.1)
+## The 23 acceptance checks
 
 | check | catches |
 | --- | --- |
@@ -166,6 +166,7 @@ change.
 | action_quality | frozen (stuck) action runs; one action dim pegged at its declared range edge; sudden jumps beyond k·sigma |
 | video_files | declared video streams missing on disk (v2 per-episode files, v3 shard pointers) |
 | video_streams | undecodable video; frame count vs episode lengths; resolution vs declared shape |
+| video_sync | cross-camera from/to timestamp drift in one episode (v3.0 metadata; stereo rigs without hardware sync) |
 | zero_variance | dims that never move (std < eps): normalization would divide by zero |
 | schema_consistency | column sets/dtypes drifting across episodes |
 | frame_continuity | dropped frames (row count vs declared length, frame_index holes) |

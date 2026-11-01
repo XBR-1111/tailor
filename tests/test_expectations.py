@@ -33,15 +33,18 @@ def statuses(dataset: Path) -> dict[str, Status]:
 
 def test_clean_fixture_is_accepted(tmp_path: Path) -> None:
     st = statuses(make_fixture(tmp_path))
+    # structural SKIPs are not defects: training_readiness needs chunk_size
+    # configured, video_sync has no per-camera timestamps to compare on v2.1
+    structural_skip = {"training_readiness", "video_sync"}
     bad = {
         n: s
         for n, s in st.items()
-        if s != Status.PASS and not (n == "training_readiness" and s == Status.SKIP)
+        if s != Status.PASS and not (n in structural_skip and s == Status.SKIP)
     }
     assert not bad, bad
     snap = load_snapshot(make_fixture(tmp_path))
     results = run_all(snap)
-    assert len(results) == 22
+    assert len(results) == 23
 
 
 def test_nan_is_caught(tmp_path: Path) -> None:
@@ -93,11 +96,13 @@ def test_cli_check_exit_codes(tmp_path: Path) -> None:
 @pytest.mark.parametrize("fmt", ["v2.1", "v3.0"])
 def test_clean_fixture_is_accepted_both_formats(tmp_path: Path, fmt: str) -> None:
     st = statuses(make_fixture(tmp_path, fmt=fmt))
-    # training_readiness SKIPs by design until chunk_size is configured
+    # structural SKIPs by design: training_readiness needs chunk_size
+    # configured; video_sync has no per-camera timestamps on v2.x
+    structural_skip = {"training_readiness", "video_sync"}
     bad = {
         n: s
         for n, s in st.items()
-        if s != Status.PASS and not (n == "training_readiness" and s == Status.SKIP)
+        if s != Status.PASS and not (n in structural_skip and s == Status.SKIP)
     }
     assert not bad, bad
 
@@ -156,3 +161,27 @@ def test_from_check_drops_action_quality_episode(tmp_path: Path) -> None:
     assert "action_quality" in decision.drop[1][-1] or any(
         "action_quality" in r for r in decision.drop[1]
     )
+
+
+def test_video_desync_caught_v3(tmp_path: Path) -> None:
+    """v3-only corruption: wrist camera's to_timestamp drifts 0.3s in ep 1.
+    video_sync must WARN and attribute ep 1; video_streams stays PASS (the
+    video file itself is well-formed — only metadata drifted)."""
+    st = statuses(make_fixture(tmp_path, "video-desync", fmt="v3.0"))
+    assert st["video_sync"] == Status.WARN
+    assert st["video_streams"] == Status.PASS
+    results = {
+        r.name: r
+        for r in run_all(load_snapshot(make_fixture(tmp_path, "video-desync", fmt="v3.0")))
+    }
+    assert results["video_sync"].details.get("episodes") == [1]
+
+
+def test_video_sync_skips_v2(tmp_path: Path) -> None:
+    st = statuses(make_fixture(tmp_path, fmt="v2.1"))
+    assert st["video_sync"] == Status.SKIP
+
+
+def test_video_sync_passes_single_camera(tmp_path: Path) -> None:
+    st = statuses(make_fixture(tmp_path, fmt="v3.0"))
+    assert st["video_sync"] == Status.PASS  # one camera -> nothing to sync

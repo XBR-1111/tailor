@@ -31,6 +31,7 @@ DEFAULTS: dict = {
     "timestamps": {"spacing_tolerance": 0.1},
     "stats_recompute": {"mean_tolerance": 0.05},
     "video_streams": {"frame_tolerance": 1},
+    "video_sync": {"tolerance": 0.05},
     "zero_variance": {"eps": 1e-6},
     "training_readiness": {"chunk_size": None},
     "action_quality": {

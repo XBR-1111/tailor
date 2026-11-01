@@ -132,3 +132,22 @@ def test_apply_backs_up_originals_byte_equal(tmp_path: Path) -> None:
     }
     assert backed_up, "timestamp repairs must be backed up"
     assert backed_up == {k: v for k, v in originals.items() if k in backed_up}
+
+
+def test_running_stats_matches_numpy(tmp_path: Path) -> None:
+    """Streaming (Chan merge) must match numpy's full-array stats exactly
+    on sane data — this is the contract both stats paths rely on."""
+    import numpy as np
+
+    from tailor.stats import RunningStats
+
+    rng = np.random.default_rng(0)
+    full = rng.standard_normal((1500, 7)) * 3 + 5
+    running = RunningStats()
+    for start in range(0, 1500, 137):  # uneven chunks on purpose
+        running.update(full[start : start + 137])
+    assert np.allclose(running.mean, full.mean(axis=0), rtol=1e-12)
+    assert np.allclose(running.std, full.std(axis=0), rtol=1e-10)
+    assert np.allclose(running.min, full.min(axis=0))
+    assert np.allclose(running.max, full.max(axis=0))
+    assert running.count.tolist() == [1500] * 7

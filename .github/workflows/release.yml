@@ -17,6 +17,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
+      - name: Verify tag matches pyproject version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PYV="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+          if [ "$TAG" != "$PYV" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $PYV — bump pyproject.toml and CHANGELOG first"
+            exit 1
+          fi
       - run: uv build
       - uses: pypa/gh-action-pypi-publish@release/v1
       - name: GitHub Release

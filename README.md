@@ -25,8 +25,8 @@ Declarative recipes (YAML) in git; every dataset is reproducible and auditable.
 ## Quickstart
 
 ```bash
-pip install lerobot-tailor      # once published; until then:
-pip install git+https://github.com/XBR-1111/tailor
+pip install lerobot-tailor
+# or track main: pip install git+https://github.com/XBR-1111/tailor
 
 tailor check /path/to/lerobot/dataset
 tailor check dataset.zip                # zip archive (wrapper dirs peeled)

@@ -25,8 +25,8 @@ tailor 是面向机器人学习数据集（LeRobot **v2.0 / v2.1 / v3.0**）的�
 ## 快速上手
 
 ```bash
-pip install lerobot-tailor      # 发布后可用；当前可先：
-pip install git+https://github.com/XBR-1111/tailor
+pip install lerobot-tailor
+# 或跟踪 main 分支：pip install git+https://github.com/XBR-1111/tailor
 
 tailor check /path/to/lerobot/dataset
 tailor check dataset.zip                # zip 归档（自动剥掉包裹层目录）

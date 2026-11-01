@@ -231,6 +231,10 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
         container.close()
 
     if fmt == "v2.1":
+        # real v2.x layout (verified on lerobot/pusht@v2.1): the chunk wraps
+        # the video key — videos/chunk-000/{video_key}/episode_XXXXXX.mp4
+        vdir = out / "videos" / "chunk-000" / VIDEO_KEY
+        vdir.mkdir(parents=True, exist_ok=True)
         for ep in range(N_EPISODES):
             short = 5 if (corrupt == "video-mismatch" and ep == 0) else 0
             encode(vdir / f"episode_{ep:06d}.mp4", EP_LENGTH - short)

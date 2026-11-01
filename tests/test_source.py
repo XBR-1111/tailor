@@ -56,7 +56,9 @@ def test_zip_rejected_without_meta(tmp_path: Path) -> None:
 def test_remote_dispatch_calls_downloader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {}
 
-    def fake_download(repo_id: str, dest: Path, full: bool = False) -> Path:
+    def fake_download(
+        repo_id: str, dest: Path, full: bool = False, revision: str | None = None
+    ) -> Path:
         calls.update(repo_id=repo_id, full=full)
         (dest / "meta").mkdir(parents=True, exist_ok=True)
         (dest / "meta" / "info.json").write_text("{}")
@@ -85,3 +87,32 @@ def test_meta_only_run_skips_file_checks(tmp_path: Path) -> None:
     assert st["episode_files"] == Status.SKIP
     assert st["video_files"] == Status.SKIP
     assert st["video_streams"] == Status.SKIP
+
+
+def test_repo_ref_syntax_splits() -> None:
+    """'org/name@v2.1' addresses a ref; 'org/name' stays whole."""
+    from tailor.source import looks_like_repo_id
+
+    assert looks_like_repo_id("lerobot/pusht")
+    # the ref is split before repo-id validation in resolve_input; the bare
+    # form must keep working and the @ form must not resolve as a local path
+    assert not looks_like_repo_id("lerobot/pusht@v2.1")
+
+
+def test_resolve_ref_cache_dirs_differ(tmp_path, monkeypatch) -> None:
+    """v2.1 and v3.0 of one repo must land in different cache dirs."""
+    from tailor import source
+
+    calls = []
+
+    def fake_download(repo_id, dest, full=False, revision=None):
+        calls.append((repo_id, str(dest), revision))
+        dest.mkdir(parents=True, exist_ok=True)
+        return dest
+
+    monkeypatch.setattr(source, "download_repo", fake_download)
+    source.resolve_input("lerobot/pusht@v2.1", download_dir=tmp_path)
+    source.resolve_input("lerobot/pusht", download_dir=tmp_path)
+    assert calls[0][0] == "lerobot/pusht" and calls[0][2] == "v2.1"
+    assert calls[1][2] is None
+    assert calls[0][1] != calls[1][1]  # distinct cache slugs

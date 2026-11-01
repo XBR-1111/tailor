@@ -6,7 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed (unreleased) — found by validating against real v2.1 datasets
+- **v2.x video layout was wrong**: checks expected `videos/{key}/chunk-XXX/…`
+  but the official v2.0/v2.1 template (verified on lerobot/pusht@v2.1) is
+  `videos/chunk-XXX/{key}/…` — every v2.1 dataset misreported ALL video files
+  missing. The synthetic fixture carried the same wrong layout, which is why
+  tests stayed green; the fixture now matches the official template.
+- HF downloads tripped the portability check: huggingface_hub's `.cache`
+  bookkeeping dir is now in the allowlist.
+- (with the repo@ref feature) local paths win before '@' splitting — a cache
+  dir literally named `repo__name@v2.1` is a path, not a ref spec.
+
 ### Added (unreleased)
+- `repo@ref` addressing: `tailor check lerobot/pusht@v2.1` checks a specific
+  format-version ref (LeRobot datasets tag each version; main is always the
+  latest). Ref-aware cache dirs — v2.1 and v3.0 of one repo never collide.
 - Reusable CI workflow `.github/workflows/tailor-check.yml`: one `uses:` line
   gates a dataset in any repository's pipeline (verdict -> job result,
   markdown report -> run artifacts). README documents it as "Use as a CI gate".

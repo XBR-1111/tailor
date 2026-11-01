@@ -46,14 +46,22 @@ def _peel_wrapper(root: Path) -> Path:
         return root
 
 
-def download_repo(repo_id: str, dest: Path, full: bool = False) -> Path:
-    """Snapshot a HF dataset repo. Meta-only by default, whole repo with full=True."""
+def download_repo(
+    repo_id: str, dest: Path, full: bool = False, revision: str | None = None
+) -> Path:
+    """Snapshot a HF dataset repo. Meta-only by default, whole repo with full=True.
+
+    revision follows the HF `repo@ref` convention: LeRobot datasets keep each
+    format version on its own ref (v2.1 / v3.0 tags, main = latest), so
+    checking an older format means checking that ref.
+    """
     from huggingface_hub import snapshot_download
 
     patterns = None if full else ["meta/*"]
     snapshot_download(
         repo_id=repo_id,
         repo_type="dataset",
+        revision=revision,
         local_dir=str(dest),
         allow_patterns=patterns,
     )
@@ -61,17 +69,30 @@ def download_repo(repo_id: str, dest: Path, full: bool = False) -> Path:
 
 
 def resolve_input(value: str, download_dir: Path | None = None, full: bool = False) -> Path:
-    """Map a CLI argument to a local dataset directory."""
-    path = Path(value)
-    if path.exists():
-        if path.is_dir():
-            return path
-        if path.suffix.lower() == ".zip":
+    """Map a CLI argument to a local dataset directory.
+
+    'org/name@ref' addresses a specific ref of an HF dataset (a branch or a
+    tag — LeRobot datasets tag each format version, e.g. lerobot/pusht@v2.1).
+    The ref is stripped before the local-path check so a directory literally
+    named 'a@b' still resolves locally first.
+    """
+    # local paths win BEFORE '@' splitting: a cache dir literally named
+    # 'repo__name@v2.1' (tailor's own cache slug) is a path, not a ref spec
+    raw_path = Path(value)
+    if raw_path.exists():
+        if raw_path.is_dir():
+            return raw_path
+        if raw_path.suffix.lower() == ".zip":
             tmp = download_dir or Path(tempfile.mkdtemp(prefix="tailor-zip-"))
-            return unpack_zip(path, tmp)
-        raise NotADirectoryError(f"{path} is neither a dataset directory nor a .zip")
-    if looks_like_repo_id(value):
+            return unpack_zip(raw_path, tmp)
+        raise NotADirectoryError(f"{raw_path} is neither a dataset directory nor a .zip")
+    repo_id, _, revision = value.partition("@")
+    used_ref = revision or None
+    if looks_like_repo_id(repo_id):
         base = download_dir or (Path.home() / ".cache" / "tailor-hf")
-        dest = base / value.replace("/", "__")
-        return download_repo(value, dest, full=full)
-    raise FileNotFoundError(f"not a local path, zip, or 'org/name' repo id: {value}")
+        # cache key must include the ref: v2.1 and v3.0 of one repo are
+        # different datasets and must not overwrite each other
+        slug = repo_id.replace("/", "__") + (f"@{revision}" if revision else "")
+        dest = base / slug
+        return download_repo(repo_id, dest, full=full, revision=used_ref)
+    raise FileNotFoundError(f"not a local path, zip, or 'org/name[@ref]' repo id: {value}")

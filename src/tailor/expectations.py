@@ -459,12 +459,14 @@ def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
                     continue
                 path = snap.root / "videos" / key / f"chunk-{c:03d}" / f"file-{f:03d}.mp4"
             else:
+                # v2.x official template: videos/chunk-XXX/{video_key}/episode_XXXXXX.mp4
+                # (the chunk wraps the key — verified against lerobot/pusht@v2.1)
                 idx = ep.get("episode_index", -1)
                 path = (
                     snap.root
                     / "videos"
-                    / key
                     / f"chunk-{idx // 1000:03d}"
+                    / key
                     / f"episode_{idx:06d}.mp4"
                 )
             if not path.is_file():
@@ -530,8 +532,8 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
                 path = (
                     snap.root
                     / "videos"
-                    / key
                     / f"chunk-{idx // 1000:03d}"
+                    / key
                     / f"episode_{idx:06d}.mp4"
                 )
                 if not path.is_file():
@@ -686,7 +688,10 @@ def check_portability(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
     for path in snap.root.rglob("*"):
         if path.is_symlink():
             problems.append(f"symlink: {path.relative_to(snap.root)}")
-    allowed_dirs = {"meta", "data", "videos"}
+    # .cache is huggingface_hub's local-dir bookkeeping (snapshot_download
+    # side effect), not dataset pollution — every HF-downloaded dataset
+    # would otherwise WARN on it
+    allowed_dirs = {"meta", "data", "videos", ".cache"}
     allowed_files = {
         "README.md",
         "LICENSE",

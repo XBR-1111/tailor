@@ -36,7 +36,10 @@ def check(
     full: bool = typer.Option(
         False,
         "--full",
-        help="Remote repo id: download the whole dataset, not just meta (full 22-check run).",
+        help=(
+            "Remote repo id (org/name or org/name@ref, e.g. lerobot/pusht@v2.1):"
+            " download the whole dataset, not just meta."
+        ),
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
     markdown: Path | None = typer.Option(

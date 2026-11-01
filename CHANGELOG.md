@@ -16,6 +16,19 @@ All notable changes to this project are documented here. The format follows
   memory O(one episode/file) instead of O(dataset), removing the OOM
   ceiling on million-frame recomputes.
 
+## [0.8.1] — 2026-11-01
+
+### Fixed
+- README claimed video re-encode as part of the clean stage; it was never
+  implemented. The Sew description now says so and points at the roadmap.
+- `--max-episodes N --sample last` selects the LAST N episodes — a
+  convenience sample of the head never sees tail-end episodes, a common
+  corruption site.
+- Determinism regression test: two fresh loads + runs must agree on every
+  result field (pins the column cache and parallel video probing).
+- Dead code removed (unreachable branch in `_longest_true_run`, redundant
+  ledger wrapper in the CLI).
+
 ## [0.8.0] — 2026-11-01
 
 ### Added

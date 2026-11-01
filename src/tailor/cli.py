@@ -48,7 +48,13 @@ def check(
         False, "--fail-on-warn", help="Exit 1 on WARN findings too (strict CI gate)."
     ),
     max_episodes: int | None = typer.Option(
-        None, "--max-episodes", help="Only inspect the first N episodes (big datasets)."
+        None, "--max-episodes", help="Only inspect N episodes (big datasets)."
+    ),
+    sample: str = typer.Option(
+        "first",
+        "--sample",
+        help="With --max-episodes: keep 'first' (default) or 'last' N episodes. "
+        "Tail-end episodes are a common corruption site.",
     ),
 ) -> None:
     """Run acceptance checks on a dataset.
@@ -75,7 +81,10 @@ def check(
         except ProfileError as e:
             console.print(f"[red]invalid profile:[/red] {e}")
             raise typer.Exit(code=2) from e
-    snap = load_snapshot(root, max_episodes=max_episodes)
+    if sample not in ("first", "last"):
+        console.print(f"[red]--sample must be 'first' or 'last', got {sample!r}[/red]")
+        raise typer.Exit(code=2)
+    snap = load_snapshot(root, max_episodes=max_episodes, sample=sample)
     if not snap.readable:
         console.print(
             "[red]dataset unreadable:[/red] missing meta/info.json or meta/episodes.jsonl"
@@ -303,19 +312,13 @@ def clean(
 @app.command()
 def provenance(path: Path = typer.Argument(..., help="Path to a dataset.")) -> None:
     """Show the tailor ledger: every filter/clean this dataset's lineage records."""
-    from tailor.ledger import render_ledger
+    from tailor.ledger import read_ledger, render_ledger
 
     snap = load_snapshot(path)
     if not snap.readable:
         console.print("[red]dataset unreadable[/red]")
         raise typer.Exit(code=2)
-    console.print(render_ledger(read_ledger_events(path)))
-
-
-def read_ledger_events(path: Path) -> list[dict]:
-    from tailor.ledger import read_ledger
-
-    return read_ledger(path)
+    console.print(render_ledger(read_ledger(path)))
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ tailor is a data-refinement pipeline for robot learning datasets (LeRobot **v2.0
 
 - **Accept** — verify incoming distributed datasets: format-version compliance, metadata-vs-data consistency ("does the package match the label"), transfer integrity, dims and stats vs your training config
 - **Cut** — episode-level filtering (frame-level issues escalate to episode removal to preserve action-chunk coherence)
-- **Sew** — deterministic cleaning only: timestamp rebuild, stats recompute, video re-encode. No imputation
+- **Sew** — deterministic cleaning only: timestamp rebuild, stats recompute. No imputation, no video re-encode (planned — see roadmap)
 - **Re-check** — cleaned output must pass the acceptance suite again before release
 - **Register** — provenance ledger: source version, dropped episodes + why, recipe hash
 
@@ -61,8 +61,9 @@ FAIL. `HF_ENDPOINT` is respected (mirrors work); downloads cache under
 Exit codes make it a CI gate: **0** accepted · **1** rejected · **2** unreadable
 (`--fail-on-warn` makes WARN exit 1 too). `--json` emits machine-readable output,
 `--markdown report.md` writes a PR/dataset-card friendly report, `--max-episodes N`
-samples the first N episodes of huge datasets (a convenience sample —
-tail-end episodes, a common corruption site, stay uncovered).
+samples N episodes of huge datasets — a convenience sample, so pair it with
+`--sample last`: tail-end episodes are a common corruption site that a
+first-N sample never sees.
 
 ## Filter — the Cut stage
 

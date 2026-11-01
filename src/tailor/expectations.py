@@ -208,9 +208,9 @@ def _longest_true_run(mask: np.ndarray) -> int:
     """Longest run of consecutive True values in a 1-D boolean array."""
     if not mask.any():
         return 0
+    # a True inside the padded array guarantees >= 2 rising/falling edges,
+    # so the pairwise edge distances below are always well-defined
     edges = np.flatnonzero(np.diff(np.concatenate([[0], mask.view(np.int8), [0]])))
-    if edges.size < 2:  # all True
-        return int(mask.size)
     return int((edges[1::2] - edges[0::2]).max())
 
 

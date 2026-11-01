@@ -14,7 +14,7 @@ tailor 是面向机器人学习数据集（LeRobot **v2.0 / v2.1 / v3.0**）的�
 
 - **Accept（验收）**——对分发来的数据集做入库检验：格式版本合规、元数据与数据一致（"货对不对板"）、传输完整性、维度与统计快照对齐训练配置
 - **Cut（裁剪）**——episode 级过滤（帧级问题升级为整条剔除，保住 action chunk 的连续性）
-- **Sew（缝制）**——只做确定性清洗：时戳重建、统计重算、视频重编码。不做插值补帧
+- **Sew（缝制）**——只做确定性清洗：时戳重建、统计重算。不做插值补帧，视频重编码在路线图上未实现
 - **Re-check（复检）**——清洗产物必须重新通过整套验收才算出厂
 - **Register（登记）**——血缘台账：源版本、剔除了哪些 episode 及原因、配方 hash
 
@@ -59,8 +59,8 @@ ACCEPTED  ·  11 passed, 0 warn, 0 failed  ·  11 skipped (meta-only run)
 
 退出码让它可以直接当 CI 门禁用：**0** 收货 · **1** 拒收 · **2** 不可读（`--fail-on-warn`
 让 WARN 也以 1 退出）。`--json` 输出机器可读结果；`--markdown report.md` 写出可贴
-PR / dataset card 的报告；`--max-episodes N` 对大数据集只抽查前 N 个 episode（便利抽样——尾部 episode
-是坏数据的常见位置，不在覆盖范围内）。
+PR / dataset card 的报告；`--max-episodes N` 对大数据集只抽查 N 个 episode——便利抽样有偏，配上
+`--sample last` 一起用：尾部 episode 是坏数据的常见位置，取前 N 永远看不到。
 
 ## Filter——Cut（裁剪）工序
 

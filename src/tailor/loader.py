@@ -20,8 +20,18 @@ from tailor.model import DatasetSnapshot
 SUPPORTED_VERSIONS = ("v2.0", "v2.1", "v3.0")
 
 
-def load_snapshot(root: Path, max_episodes: int | None = None) -> DatasetSnapshot:
-    """Read metadata and sample per-episode frames for a LeRobot dataset."""
+def load_snapshot(
+    root: Path, max_episodes: int | None = None, sample: str = "first"
+) -> DatasetSnapshot:
+    """Read metadata and sample per-episode frames for a LeRobot dataset.
+
+    sample picks WHICH N episodes --max-episodes keeps: "first" (default,
+    cheap convenience) or "last" (tail-end episodes are a common corruption
+    site — the real-dataset defect this suite found first lived in the last
+    episode).
+    """
+    if sample not in ("first", "last"):
+        raise ValueError(f"sample must be 'first' or 'last', got {sample!r}")
     snap = DatasetSnapshot(root=root)
     meta = root / "meta"
 
@@ -43,7 +53,12 @@ def load_snapshot(root: Path, max_episodes: int | None = None) -> DatasetSnapsho
         snap.tasks = _read_jsonl(meta / "tasks.jsonl")
 
     if snap.episodes:
-        episodes = snap.episodes if max_episodes is None else snap.episodes[:max_episodes]
+        if max_episodes is None:
+            episodes = snap.episodes
+        elif sample == "last":
+            episodes = snap.episodes[-max_episodes:]
+        else:
+            episodes = snap.episodes[:max_episodes]
         if version == "v3.0":
             # v3 frames live in shared chunk files; group once per file.
             # v0.1 reads whole chunk files — fine at this scale; slicing via

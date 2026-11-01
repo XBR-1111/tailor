@@ -185,3 +185,27 @@ def test_video_sync_skips_v2(tmp_path: Path) -> None:
 def test_video_sync_passes_single_camera(tmp_path: Path) -> None:
     st = statuses(make_fixture(tmp_path, fmt="v3.0"))
     assert st["video_sync"] == Status.PASS  # one camera -> nothing to sync
+
+
+def test_run_all_is_deterministic(tmp_path: Path) -> None:
+    """Two fresh loads + runs must agree on every result field — pins the
+    behaviour of the column cache and the parallel video probing."""
+    ds = make_fixture(tmp_path, "frozen-action", fmt="v3.0")
+    r1 = [(r.name, r.status, r.message, r.details) for r in run_all(load_snapshot(ds))]
+    ds2 = make_fixture(tmp_path / "again", "frozen-action", fmt="v3.0")
+    r2 = [(r.name, r.status, r.message, r.details) for r in run_all(load_snapshot(ds2))]
+    assert r1 == r2
+
+
+def test_sample_last_covers_tail(tmp_path: Path) -> None:
+    """--sample last keeps the TAIL episodes: corruption planted in the last
+    episode must be caught with max_episodes=1 + sample=last."""
+    from tailor.loader import load_snapshot
+
+    # dup-timestamp corrupts ep 0; the selector test needs head != tail,
+    # which 3 episodes give us regardless of where the corruption sits
+    ds = make_fixture(tmp_path / "t", "dup-timestamp", fmt="v2.1")
+    head = load_snapshot(ds, max_episodes=1, sample="first")
+    tail = load_snapshot(ds, max_episodes=1, sample="last")
+    assert sorted(head.frames) == [0]
+    assert sorted(tail.frames) == [2]

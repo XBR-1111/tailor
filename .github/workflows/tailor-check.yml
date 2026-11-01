@@ -1,0 +1,58 @@
+name: tailor check (reusable)
+
+# Reusable workflow: gate a robot dataset in YOUR CI with one line.
+#
+#   jobs:
+#     check-dataset:
+#       uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.8.1
+#       with:
+#         dataset: lerobot/unitreeh1_fold_clothes
+#
+# Verdict maps to the job result (rejected = red), the markdown report is
+# uploaded as an artifact, and `tailor check` never writes to your dataset.
+on:
+  workflow_call:
+    inputs:
+      dataset:
+        description: "Local path (with your repo checked out), a .zip, or a HF repo id (org/name)"
+        required: true
+        type: string
+      full:
+        description: "Download the whole HF dataset (--full) instead of meta-only pre-check"
+        required: false
+        default: false
+        type: boolean
+      fail-on-warn:
+        description: "Exit non-zero on WARN findings too (strict gate)"
+        required: false
+        default: false
+        type: boolean
+      extra-args:
+        description: "Extra args passed to `tailor check` verbatim (e.g. '--profile my.yaml')"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install lerobot-tailor
+      - name: tailor check
+        run: |
+          tailor check "${{ inputs.dataset }}" \
+            ${{ inputs.full && '--full' || '' }} \
+            ${{ inputs.fail-on-warn && '--fail-on-warn' || '' }} \
+            ${{ inputs.extra-args }} \
+            --markdown tailor-report.md
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tailor-report
+          path: tailor-report.md
+          if-no-files-found: ignore

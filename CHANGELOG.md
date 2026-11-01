@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added (unreleased)
+- Reusable CI workflow `.github/workflows/tailor-check.yml`: one `uses:` line
+  gates a dataset in any repository's pipeline (verdict -> job result,
+  markdown report -> run artifacts). README documents it as "Use as a CI gate".
+- v2 filter support: closed after investigation — lerobot's edit engine only
+  writes v3.0 (`CODEBASE_VERSION`), so filtering a v2 dataset silently
+  upgrades the format; the convert-first guidance in the error message stays.
 - `video_sync` check: cross-camera from/to timestamp drift per episode
   (v3.0 metadata level; v2.x SKIPs — no per-camera timestamps to compare).
   `tolerance` configurable, default 50ms; WARN with episode attribution.

@@ -110,6 +110,25 @@ tailor provenance /data/ds_filtered
 `check` 永不写盘——验收是只读操作。指纹是结构级的（episode 元数据 + 数据文件
 大小），用于识别身份，不是密码学证明。
 
+## 当 CI 门禁用
+
+`tailor check` 的设计位置就是别人的 CI：退出码是契约（**0** 收货 / **1** 拒收 /
+**2** 不可读），`--json` 给机器、`--markdown` 给人看。仓库自带一个可复用
+workflow，你的流水线一行就能对数据集设门禁：
+
+```yaml
+# your-repo/.github/workflows/dataset-quality.yml
+jobs:
+  check-dataset:
+    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.8.1
+    with:
+      dataset: lerobot/unitreeh1_fold_clothes   # HF repo id、本地路径或 .zip
+      fail-on-warn: false
+```
+
+数据集被拒则 job 变红；markdown 报告进 run 的 artifacts。引用请 pin 到
+tag；`check` 是只读操作，不会写数据集。
+
 ## 可配置的验收 profile
 
 什么算合格，每个机器人、每个任务、每种训练配置都不一样。profile（YAML

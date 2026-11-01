@@ -117,6 +117,26 @@ tailor provenance /data/ds_filtered
 `check` never writes — acceptance is read-only. Fingerprints are structural
 (episode metadata + data file sizes), for identity not cryptographic proof.
 
+## Use as a CI gate
+
+`tailor check` is designed to sit in someone else's CI: exit codes are the
+contract (**0** accepted / **1** rejected / **2** unreadable), `--json` for
+machines, `--markdown` for humans. A ready-made reusable workflow ships in
+this repo — one line gates a dataset in your pipeline:
+
+```yaml
+# your-repo/.github/workflows/dataset-quality.yml
+jobs:
+  check-dataset:
+    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.8.1
+    with:
+      dataset: lerobot/unitreeh1_fold_clothes   # HF repo id, local path, or .zip
+      fail-on-warn: false
+```
+
+A rejected dataset fails the job; the markdown report lands in the run's
+artifacts. Pin to a tag; `check` is read-only and never writes to the dataset.
+
 ## Configurable acceptance profiles
 
 What counts as acceptable differs per robot, task and training config. A

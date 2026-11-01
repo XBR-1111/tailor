@@ -48,3 +48,25 @@ uv run pytest --cov=tailor   # tests + coverage floor (75%)
 - Unknown profile keys or check names are a hard error (typos must not
   silently keep defaults).
 - `PASS` cannot be remapped by profiles — only WARN/FAIL severity and thresholds.
+
+## Releasing
+
+**Not every push is a release.** `release.yml` publishes only on tag push;
+ordinary pushes run CI and stop there. Most merges should carry no tag.
+
+When a release is warranted, the bump follows SemVer strictly — no judgement
+calls at tag time:
+
+| change in the release | bump | example |
+| --- | --- | --- |
+| new user-visible feature (new check, new flag, new profile key) | MINOR | `enabled: false` → 0.8.0 |
+| bug fix, internal refactor, performance work, docs, tooling | PATCH | crash fix, bench speedup |
+| breaking install/API change (0.x convention: breaking rides MINOR) | MINOR | PyPI rename → 0.6.0 |
+
+Rule of thumb: if the CHANGELOG entry would convince a *user* to upgrade, it
+is at least MINOR-worthy on its own; a batch of "won't change your life"
+items is a PATCH. Performance work with no new behaviour is a PATCH even
+when it took effort — effort is not a version signal.
+
+Procedure: bump `pyproject.toml`, add the CHANGELOG section, then
+`git tag vX.Y.Z && git push origin vX.Y.Z` — Trusted Publishing does the rest.

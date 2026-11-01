@@ -186,7 +186,16 @@ tailor check /data/dataset --profile my_requirements.yaml
 | duplicate_episodes | 跨 episode 的逐字节相同 state/action 轨迹 |
 | splits | 声明的各 split episode 区间重叠（train/eval 泄漏） |
 
-已在一个真实的 921 MB 分发数据集（`lerobot/unitreeh1_fold_clothes`，38 episodes / 1.9 万帧 / 双目相机）上验证，配合注入坏数据的确定性合成 fixture——每种坏数据都被至少一条测试抓住，两种格式版本各验一遍。这个真实数据集自身带着两个被 tailor 首跑就抓到的问题：一个 action 维贴边界 29 帧（gripper 夹住叠好的衣服，WARN 级）；以及一处真实的元数据缺陷——`cam_left` 的 episode 分片指针全部指向 `file-000.mp4`，但它的 500 帧实际躺在无人引用的 `file-001.mp4` 里。已用官方读取器验证：`LeRobotDataset` 加载正常，但 episode 37 的所有帧都抛 `IndexError`（视频索引封顶 18500）——训练只要采到最后一个 episode 就崩。
+已在真实分发数据集上跨全部三种受支持格式验证——v3.0（921 MB 的
+`lerobot/unitreeh1_fold_clothes`）与 v2.1、v2.0 双版本的 pusht（206 集）、
+xarm_lift_medium_image（800 集）、utaustin_mutex（1500 集 / 36.2 万帧 / 1.4 GB，
+整轮检查约 3 秒），全部经 `@ref` 语法检查（main 永远指向最新格式）。过程中
+抓到真问题：utaustin 6 个 episode 的 frozen action（最重：ep180 连续 12 帧相同
+动作）、pusht v2.0 的 3 个 episode 动作贴边界。v2 轮还揪出并修复了一个布局
+bug——所有 v2.x 数据集的视频文件被误报缺失（合成 fixture 带着同样的错误布局，
+真实数据抓住了 fixture 抓不住的东西）。
+
+另在一个真实的 921 MB 分发数据集（`lerobot/unitreeh1_fold_clothes`，38 episodes / 1.9 万帧 / 双目相机）上验证，配合注入坏数据的确定性合成 fixture——每种坏数据都被至少一条测试抓住，两种格式版本各验一遍。这个真实数据集自身带着两个被 tailor 首跑就抓到的问题：一个 action 维贴边界 29 帧（gripper 夹住叠好的衣服，WARN 级）；以及一处真实的元数据缺陷——`cam_left` 的 episode 分片指针全部指向 `file-000.mp4`，但它的 500 帧实际躺在无人引用的 `file-001.mp4` 里。已用官方读取器验证：`LeRobotDataset` 加载正常，但 episode 37 的所有帧都抛 `IndexError`（视频索引封顶 18500）——训练只要采到最后一个 episode 就崩。
 
 ## 性能
 

@@ -196,16 +196,17 @@ change.
 | duplicate_episodes | byte-identical state/action trajectories across episodes |
 | splits | overlapping episode ranges across declared splits (train/eval leakage) |
 
-Validated on real distributed datasets on both format generations — v3.0:
-`lerobot/unitreeh1_fold_clothes` (921 MB), and v2.1 (checked via the `@ref`
-syntax, since `main` always points at the latest format):
-`lerobot/pusht@v2.1` (206 eps, clean accept), `lerobot/xarm_lift_medium_image@v2.1`
-(800 eps, clean accept), and `lerobot/utaustin_mutex@v2.1` — 1500 episodes /
-362k frames / 1.4 GB checked end-to-end in **3.3 s**, whose only finding is a
-real one: frozen action runs in 6 episodes (worst: 12 consecutive identical
-actions in ep 180). That v2.1 round surfaced and fixed a layout bug where
-every v2.x dataset misreported all video files missing (the synthetic fixture
-carried the same wrong layout — real data caught what fixtures could not).
+Validated on real distributed datasets across all three supported formats —
+v3.0: `lerobot/unitreeh1_fold_clothes` (921 MB); v2.1 AND v2.0 of
+`lerobot/pusht` (206 eps), `lerobot/xarm_lift_medium_image` (800 eps) and
+`lerobot/utaustin_mutex` (1500 eps / 362k frames / 1.4 GB — the full check
+runs end-to-end in **~3 s**), all checked via the `@ref` syntax since `main`
+always points at the latest format. Real findings on the way: frozen action
+runs in 6 utaustin episodes (worst: 12 identical actions in ep 180), and
+range-edge pegging in 3 pusht v2.0 episodes. The v2.x round surfaced and
+fixed a layout bug where every v2.x dataset misreported all video files
+missing (the synthetic fixture carried the same wrong layout — real data
+caught what fixtures could not).
 
 Also validated on a real 921 MB distributed dataset (`lerobot/unitreeh1_fold_clothes`,
 38 episodes / 19k frames / stereo video) plus deterministic synthetic fixtures

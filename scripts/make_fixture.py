@@ -38,6 +38,8 @@ CORRUPTIONS = (
     "stats-mismatch",  # stats.json action mean shifted by 0.5
     "missing-video",  # delete one video file (v2: ep1 / v3: the only shard)
     "video-mismatch",  # video shard short by 5 frames vs episode lengths
+    "video-fps",  # container encoded at half the declared fps (5 vs 10)
+    "video-blackout",  # video starts black (lens cap on / camera never started)
     "zero-variance",  # state dim 0 frozen at a constant (dead sensor)
     "schema-drop",  # v2 only: episode 1 parquet loses the observation.state column
     "dropped-frames",  # episode 0 loses frames 8-10: holes in frame_index, rows<length
@@ -208,23 +210,26 @@ VIDEO_SIZE = 64
 
 
 def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
-    # zero frames are fine: existence, frame count and resolution are what
-    # the checks verify; nobody watches fixture videos for content
+    # frames carry grey noise (rng-seeded, deterministic): the black-edge
+    # check decodes real content, so clean fixtures must not look black
     import av
 
     vdir = out / "videos" / VIDEO_KEY / "chunk-000"
     vdir.mkdir(parents=True, exist_ok=True)
 
-    def encode(path: Path, nframes: int) -> None:
+    def encode(path: Path, nframes: int, *, rate: int = FPS, black_prefix: int = 0) -> None:
         container = av.open(str(path), mode="w")
-        stream = container.add_stream("libx264", rate=FPS)
+        stream = container.add_stream("libx264", rate=rate)
         stream.width = stream.height = VIDEO_SIZE
         stream.pix_fmt = "yuv420p"
-        blank = av.VideoFrame.from_ndarray(
-            np.zeros((VIDEO_SIZE, VIDEO_SIZE, 3), dtype=np.uint8), format="rgb24"
-        )
-        for _ in range(nframes):
-            for packet in stream.encode(blank):
+        rng = np.random.default_rng(1234)
+        for i in range(nframes):
+            if i < black_prefix:
+                arr = np.zeros((VIDEO_SIZE, VIDEO_SIZE, 3), dtype=np.uint8)
+            else:
+                arr = rng.integers(60, 200, (VIDEO_SIZE, VIDEO_SIZE, 3), dtype=np.uint8)
+            frame = av.VideoFrame.from_ndarray(arr, format="rgb24")
+            for packet in stream.encode(frame):
                 container.mux(packet)
         for packet in stream.encode():  # flush
             container.mux(packet)
@@ -237,13 +242,20 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
         vdir.mkdir(parents=True, exist_ok=True)
         for ep in range(N_EPISODES):
             short = 5 if (corrupt == "video-mismatch" and ep == 0) else 0
-            encode(vdir / f"episode_{ep:06d}.mp4", EP_LENGTH - short)
+            # fixtures are 20-frame episodes: with head_frames=24 the whole
+            # file is the head window, so the entire episode must be black
+            black = EP_LENGTH if (corrupt == "video-blackout" and ep == 0) else 0
+            rate = FPS // 2 if (corrupt == "video-fps" and ep == 0) else FPS
+            encode(vdir / f"episode_{ep:06d}.mp4", EP_LENGTH - short, rate=rate, black_prefix=black)
         if corrupt == "missing-video":
             (vdir / "episode_000001.mp4").unlink()
     else:
         # v3: all episodes share one shard, cut by from/to timestamps
         short = 5 if corrupt == "video-mismatch" else 0
-        encode(vdir / "file-000.mp4", N_EPISODES * EP_LENGTH - short)
+        # 30 black frames > head_frames(24): the shard's head window is black
+        black = 30 if corrupt == "video-blackout" else 0
+        rate = FPS // 2 if corrupt == "video-fps" else FPS
+        encode(vdir / "file-000.mp4", N_EPISODES * EP_LENGTH - short, rate=rate, black_prefix=black)
         if corrupt == "missing-video":
             (vdir / "file-000.mp4").unlink()
         if corrupt == "video-desync":
@@ -308,6 +320,7 @@ def _write_info(meta: Path, fmt: str, corrupt: str | None, total_frames: int) ->
                         "dtype": "video",
                         "shape": [VIDEO_SIZE, VIDEO_SIZE, 3],
                         "names": ["height", "width", "channel"],
+                        "fps": FPS,
                     },
                     **(
                         {
@@ -315,6 +328,7 @@ def _write_info(meta: Path, fmt: str, corrupt: str | None, total_frames: int) ->
                                 "dtype": "video",
                                 "shape": [VIDEO_SIZE, VIDEO_SIZE, 3],
                                 "names": ["height", "width", "channel"],
+                                "fps": FPS,
                             }
                         }
                         if corrupt == "video-desync"

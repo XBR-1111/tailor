@@ -185,7 +185,8 @@ change.
 | stats_recompute | declared stats.json mean/std drifting from recomputed values |
 | action_quality | frozen (stuck) action runs; one action dim pegged at its declared range edge; sudden jumps beyond k·sigma |
 | video_files | declared video streams missing on disk (v2 per-episode files, v3 shard pointers) |
-| video_streams | undecodable video; frame count vs episode lengths; resolution vs declared shape |
+| video_streams | undecodable video; frame count vs episode lengths; resolution vs declared shape; container fps vs declared fps; header duration vs decodable content (truncated recordings); rotation metadata; interlaced streams |
+| video_black | black openings/closings — lens cap left on, camera that never started (decodes only the first/last frames of each file) |
 | video_sync | cross-camera from/to timestamp drift in one episode (v3.0 metadata; stereo rigs without hardware sync) |
 | zero_variance | dims that never move (std < eps): normalization would divide by zero |
 | schema_consistency | column sets/dtypes drifting across episodes |

@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `video_black` check: black openings/closings per video file (lens cap left
+  on, camera that never started). Decodes only the first/last few frames —
+  edge failures that frame counts and metadata cannot see. Tunables:
+  `head_frames` (24), `tail_frames` (24), `dark_share` (0.9).
+- `video_streams` gained four header-level sub-checks at zero decode cost:
+  container fps vs the fps declared in `info.json` features (`fps_rel_tol`,
+  default 5% — catches silent profile mismatches before they corrupt
+  timestamp reconstruction), header duration vs frames/fps (`duration_tol`,
+  default 2% — truncated recordings), rotation metadata (players rotate,
+  loaders don't), and interlaced stream flags.
+- Fixture videos now carry deterministic grey-noise content (they were solid
+  black before — fine when only counts were checked, wrong once content is),
+  and the fixture `info.json` declares per-video `fps` like real datasets.
+
 ## [0.9.0] — 2026-11-01
 
 ### Fixed — found by validating against real v2.x datasets

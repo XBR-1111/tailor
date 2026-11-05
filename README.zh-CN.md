@@ -175,7 +175,8 @@ tailor check /data/dataset --profile my_requirements.yaml
 | stats_recompute | 声明的 stats.json mean/std 与重算值漂移超标 |
 | action_quality | frozen（连续相同 action）；某一 action 维持续钉在声明范围边界；超过 k·σ 的突变跳变 |
 | video_files | 声明的视频流在磁盘上缺失（v2 按每集文件、v3 按分片指针查） |
-| video_streams | 视频不可解码；帧数与 episode 长度不符；分辨率与声明 shape 不符 |
+| video_streams | 视频不可解码；帧数与 episode 长度不符；分辨率与声明 shape 不符；容器 fps 与声明 fps 不符；头声明时长与可解码内容不符（录制中断）；旋转元数据；隔行扫描流 |
+| video_black | 开头/结尾黑屏——镜头盖没摘、相机没启动（每个文件只解码首尾少量帧） |
 | video_sync | 同一 episode 内多相机 from/to 时间戳漂移（v3.0 元数据级；无硬件同步的相机组） |
 | zero_variance | 永不变化的维度（std < eps）：归一化会除零 |
 | schema_consistency | 跨 episode 的列集/dtype 漂移 |

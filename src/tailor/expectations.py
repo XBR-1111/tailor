@@ -9,16 +9,30 @@ label"): format compliance, metadata-vs-data consistency, integrity.
 """
 
 import json
+import math
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 
 from tailor.loader import SUPPORTED_VERSIONS, _episode_parquet_path
 from tailor.model import CheckResult, DatasetSnapshot, Status
 
+if TYPE_CHECKING:
+    import av
+
 Expectation = Callable[[DatasetSnapshot, dict], CheckResult]
+
+T = TypeVar("T")
+
+# frames, width, height, fps, duration_s, interlaced, rotation_deg
+ProbeResult = tuple[int, int, int, float | None, float | None, bool | None, float | None]
+
+# black-edge thresholds: grey level counts as dark below 24/255; a frame is
+# "black" when ≥98% of its pixels are dark (compression noise keeps a few alive)
+BLACK_DARK_LEVEL = 24
+BLACK_DARK_FRAC = 0.98
 
 
 def _ok(name: str, message: str = "") -> CheckResult:
@@ -438,6 +452,71 @@ def _video_keys(info: dict) -> list[str]:
     return [key for key, feat in info.get("features", {}).items() if feat.get("dtype") == "video"]
 
 
+def _stream_fps(stream: "av.VideoStream") -> float | None:
+    """Container-declared fps, preferring average_rate over codec framerate."""
+    rate = getattr(stream, "average_rate", None) or stream.codec_context.framerate
+    if rate is None or rate <= 0:
+        return None
+    return float(rate)
+
+
+def _stream_duration_s(
+    stream: "av.VideoStream", container: "av.container.InputContainer"
+) -> float | None:
+    """Duration in seconds from the stream header, else the container header."""
+    if stream.duration is not None and stream.time_base:
+        return float(stream.duration * stream.time_base)
+    if container.duration is not None:
+        return float(container.duration) / 1_000_000.0
+    return None
+
+
+def _rotation_degrees(stream: "av.VideoStream") -> float | None:
+    """Display rotation from side data / legacy metadata; None when upright.
+
+    MP4 writers store a displaymatrix; older files used a plain 'rotate'
+    tag. Both are honored — players apply them, most training loaders
+    don't, so a rotated file silently trains on sideways frames.
+    """
+    side = getattr(stream, "side_data", None) or {}
+    matrix = side.get("displaymatrix")
+    if matrix is not None:
+        identity = (1, 0, 0, 0, 1, 0, 0, 0, 1)
+        if tuple(matrix[:9]) == identity:
+            return None
+        return round(-math.degrees(math.atan2(matrix[3], matrix[0]))) % 360
+    legacy = (getattr(stream, "metadata", None) or {}).get("rotate")
+    if legacy is not None:
+        try:
+            deg = float(legacy) % 360
+        except ValueError:
+            return None
+        return deg or None
+    return None
+
+
+def _interlaced(stream: "av.VideoStream") -> bool | None:
+    """True when the stream is flagged interlaced; None when undeterminable."""
+    fo = getattr(getattr(stream, "codec_context", None), "field_order", None)
+    if fo is None:
+        return None
+    text = str(fo).upper()
+    if text.isdigit():
+        return int(text) not in (0, 1)  # FFmpeg: 0 unknown, 1 progressive
+    return text not in ("NONE", "UNKNOWN", "PROGRESSIVE", "UNSPECIFIED")
+
+
+def _duration_gap_ratio(frames: int, fps: float | None, duration_s: float | None) -> float | None:
+    """|decoded-length - header-duration| / header-duration, None when unknown.
+
+    frames/fps estimates what the file should decode to; a header claiming
+    much more means the recording was cut off before it finalised.
+    """
+    if not frames or fps is None or fps <= 0 or duration_s is None or duration_s <= 0:
+        return None
+    return abs(frames / fps - duration_s) / duration_s
+
+
 def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
     if not (snap.root / "videos").is_dir():
@@ -478,44 +557,19 @@ def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
     return _ok("video_files", f"{len(keys)} stream(s)")
 
 
-def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
-    cfg = cfg or {}
-    if not (snap.root / "videos").is_dir():
-        return _skip("video_streams", "videos/ not on disk (meta-only run? use --full)")
-    if snap.info is None or snap.episodes is None:
-        return _skip("video_streams", "info.json or episode metadata unreadable")
-    keys = _video_keys(snap.info)
-    if not keys:
-        return _ok("video_streams", "no video streams declared")
-    try:
-        import av
-    except ImportError:
-        return _skip("video_streams", "PyAV not installed (pip install av)")
-    tolerance = cfg.get("frame_tolerance", 1)
+def _video_probe_jobs(snap: DatasetSnapshot, keys: list[str]) -> list[tuple[str, str, Path, int]]:
+    """(key, label, path, expected_frames) for every declared video file on disk.
+
+    Shared by the stream probe and the head/tail decode: v3 episodes share
+    shards, so expected frames are summed per shard; v2 cuts one file per
+    episode. Missing files are skipped — video_files already reports them.
+    """
     version = (snap.info or {}).get("codebase_version")
-
-    def _probe(path: Path) -> tuple[int, int, int]:
-        # packet count == frame count only for CFR streams without B-frames;
-        # B-frame encodes may need decoded-frame counting (frame_tolerance
-        # absorbs the usual off-by-a-couple, not systematic differences).
-        # Container nb_frames metadata is trusted when present (MP4/H.264
-        # carries it): reading the header beats demuxing every packet.
-        container = av.open(str(path))
-        stream = container.streams.video[0]
-        nb = int(getattr(stream, "frames", 0) or 0)
-        frames = nb if nb > 0 else sum(1 for p in container.demux(video=0) if p.dts is not None)
-        w, h = stream.codec_context.width, stream.codec_context.height
-        container.close()
-        return frames, w, h
-
-    # collect probe jobs first, run them in parallel (av releases the GIL),
-    # then judge — video probing dominates wall time on video-heavy datasets
-    jobs: list[tuple[str, str, Path, int]] = []  # (key, label, path, expected)
+    jobs: list[tuple[str, str, Path, int]] = []
+    if snap.episodes is None:
+        return jobs
     for key in keys:
-        shape = snap.info["features"][key].get("shape", [])
         if version == "v3.0":
-            # episodes share shards: expected frames = sum of lengths pointing
-            # at the same (chunk, file)
             shards: dict[tuple, list] = {}
             for ep in snap.episodes:
                 c, f = ep.get(f"videos/{key}/chunk_index"), ep.get(f"videos/{key}/file_index")
@@ -524,7 +578,7 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
             for (c, f), lengths in shards.items():
                 path = snap.root / "videos" / key / f"chunk-{c:03d}" / f"file-{f:03d}.mp4"
                 if not path.is_file():
-                    continue  # already reported by video_files
+                    continue
                 jobs.append((key, path.name, path, sum(lengths)))
         else:
             for ep in snap.episodes:
@@ -539,6 +593,47 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
                 if not path.is_file():
                     continue
                 jobs.append((key, f"ep {idx}", path, ep.get("length", 0)))
+    return jobs
+
+
+def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if not (snap.root / "videos").is_dir():
+        return _skip("video_streams", "videos/ not on disk (meta-only run? use --full)")
+    if snap.info is None or snap.episodes is None:
+        return _skip("video_streams", "info.json or episode metadata unreadable")
+    keys = _video_keys(snap.info)
+    if not keys:
+        return _ok("video_streams", "no video streams declared")
+    try:
+        import av
+    except ImportError:
+        return _skip("video_streams", "PyAV not installed (pip install av)")
+    tolerance = cfg.get("frame_tolerance", 1)
+
+    def _probe(
+        path: Path,
+    ) -> tuple[int, int, int, float | None, float | None, bool | None, float | None]:
+        # packet count == frame count only for CFR streams without B-frames;
+        # B-frame encodes may need decoded-frame counting (frame_tolerance
+        # absorbs the usual off-by-a-couple, not systematic differences).
+        # Container nb_frames metadata is trusted when present (MP4/H.264
+        # carries it): reading the header beats demuxing every packet.
+        container = av.open(str(path))
+        stream = container.streams.video[0]
+        nb = int(getattr(stream, "frames", 0) or 0)
+        frames = nb if nb > 0 else sum(1 for p in container.demux(video=0) if p.dts is not None)
+        w, h = stream.codec_context.width, stream.codec_context.height
+        fps = _stream_fps(stream)
+        duration = _stream_duration_s(stream, container)
+        interlaced = _interlaced(stream)
+        rotation = _rotation_degrees(stream)
+        container.close()
+        return frames, w, h, fps, duration, interlaced, rotation
+
+    # collect probe jobs first, run them in parallel (av releases the GIL),
+    # then judge — video probing dominates wall time on video-heavy datasets
+    jobs = _video_probe_jobs(snap, keys)
 
     problems: list[str] = []
     import os
@@ -547,28 +642,135 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     workers = min(4, os.cpu_count() or 1)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         probed = list(pool.map(lambda j: _safe_probe(_probe, j[2]), jobs))
+    fps_rel_tol = cfg.get("fps_rel_tol", 0.05)
+    duration_tol = cfg.get("duration_tol", 0.02)
     for (key, label, _path, expected), result in zip(jobs, probed, strict=True):
         shape = snap.info["features"][key].get("shape", [])
         if isinstance(result, Exception):
             problems.append(f"{key}: {label} video undecodable")
             continue
-        frames, w, h = result
+        frames, w, h, fps, duration, interlaced, rotation = result
         if abs(frames - expected) > tolerance:
             problems.append(f"{key} {label}: {frames} frames vs {expected} episode frames")
         if len(shape) >= 2 and (h, w) != (shape[0], shape[1]):
             problems.append(f"{key} {label}: {w}x{h} vs declared {shape[1]}x{shape[0]}")
+        # declared fps (info.json features) vs container fps: a silent unit
+        # or profile mismatch breaks timestamp reconstruction downstream
+        declared_fps = snap.info["features"][key].get("fps")
+        if fps and declared_fps and abs(fps - declared_fps) > max(fps_rel_tol * declared_fps, 0.5):
+            problems.append(
+                f"{key} {label}: container {fps:g} fps vs declared {declared_fps:g} fps"
+            )
+        # frames/fps vs header duration: a header claiming far more than the
+        # file decodes to means the recording was cut off before finalising
+        gap = _duration_gap_ratio(frames, fps, duration)
+        if gap is not None and gap > duration_tol:
+            problems.append(
+                f"{key} {label}: decodes to ~{frames / (fps or 1):.1f}s but header "
+                f"says {duration:.1f}s ({gap:.0%} truncated)"
+            )
+        if rotation:
+            problems.append(
+                f"{key} {label}: rotation {rotation:g}° metadata (players rotate, loaders don't)"
+            )
+        if interlaced:
+            problems.append(f"{key} {label}: interlaced stream (loaders assume progressive)")
     if problems:
         return _fail("video_streams", f"{len(problems)} stream problem(s)", problems=problems[:10])
     return _ok("video_streams", f"{len(keys)} stream(s) probed")
 
 
-def _safe_probe(
-    probe: "Callable[[Path], tuple[int, int, int]]", path: Path
-) -> tuple[int, int, int] | Exception:
+def _safe_probe(probe: "Callable[[Path], T]", path: Path) -> "T | Exception":
     try:
         return probe(path)
     except Exception as e:  # undecodable container must fail the check, not the run
         return e
+
+
+def _decode_edge_frames(
+    path: Path, head: int, tail: int, fps_hint: float | None
+) -> tuple[list[bool], list[bool]]:
+    """Per-frame 'is black' flags for the first/last frames of one file.
+
+    Cheap content probe: only the head and tail are decoded (the classic
+    'camera never started' / 'recording cut off' failures live at the
+    edges), so cost is O(head+tail), not O(file).
+    """
+    import av
+
+    def _black_flags(container: "av.container.InputContainer", n: int) -> list[bool]:
+        flags: list[bool] = []
+        for frame in container.decode(container.streams.video[0]):
+            gray = frame.reformat(format="gray").to_ndarray()
+            dark = float((gray < BLACK_DARK_LEVEL).mean())
+            flags.append(dark >= BLACK_DARK_FRAC)
+            if len(flags) >= n:
+                break
+        return flags
+
+    container = av.open(str(path))
+    try:
+        head_flags = _black_flags(container, head)
+        tail_flags: list[bool] = []
+        stream = container.streams.video[0]
+        duration = _stream_duration_s(stream, container)
+        fps = fps_hint or _stream_fps(stream) or 30.0
+        if duration and tail:
+            # seek into the file by container timestamp (µs), land before the
+            # target so the tail window is fully covered after keyframe realign
+            target = max(0.0, duration - (tail / fps) - 1.0)
+            container.seek(int(target * 1_000_000))
+            tail_flags = _black_flags(container, tail * 3)[-tail:]
+        return head_flags, tail_flags
+    finally:
+        container.close()
+
+
+def check_video_black(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    """Black openings/closings: lens cap left on, camera that never started.
+
+    Decodes only the first/last few frames of each video file — the edge
+    failures that frame counts and metadata cannot see. A mid-file black
+    span is out of scope (needs a full decode); this check is the cheap
+    80% of that value.
+    """
+    cfg = cfg or {}
+    if not (snap.root / "videos").is_dir():
+        return _skip("video_black", "videos/ not on disk (meta-only run? use --full)")
+    if snap.info is None or snap.episodes is None:
+        return _skip("video_black", "info.json or episode metadata unreadable")
+    keys = _video_keys(snap.info)
+    if not keys:
+        return _ok("video_black", "no video streams declared")
+    try:
+        import av  # noqa: F401 — capability probe, same gate as video_streams
+    except ImportError:
+        return _skip("video_black", "PyAV not installed (pip install av)")
+
+    head = int(cfg.get("head_frames", 24))
+    tail = int(cfg.get("tail_frames", 24))
+    dark_share = float(cfg.get("dark_share", 0.9))
+    jobs = _video_probe_jobs(snap, keys)
+    problems: list[str] = []
+    for key, label, path, _expected in jobs:
+        result = _safe_probe(lambda p: _decode_edge_frames(p, head, tail, None), path)
+        if isinstance(result, Exception):
+            problems.append(f"{key}: {label} undecodable")
+            continue
+        head_flags, tail_flags = result
+        if head_flags and (sum(head_flags) / len(head_flags)) >= dark_share:
+            problems.append(
+                f"{key} {label}: black opening ({sum(head_flags)}/{len(head_flags)} frames)"
+            )
+        if tail_flags and (sum(tail_flags) / len(tail_flags)) >= dark_share:
+            problems.append(
+                f"{key} {label}: black closing ({sum(tail_flags)}/{len(tail_flags)} frames)"
+            )
+    if problems:
+        return _fail(
+            "video_black", f"{len(problems)} black-edge problem(s)", problems=problems[:10]
+        )
+    return _ok("video_black", f"{len(keys)} stream(s), edges not black")
 
 
 def check_zero_variance(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
@@ -841,6 +1043,7 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_action_quality,
         check_video_files,
         check_video_streams,
+        check_video_black,
         check_video_sync,
         check_zero_variance,
         check_schema_consistency,

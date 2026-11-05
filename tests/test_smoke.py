@@ -8,8 +8,18 @@ from tailor.cli import app
 runner = CliRunner()
 
 
+def _pyproject_version() -> str:
+    import tomllib
+    from pathlib import Path as _P
+
+    data = tomllib.loads((_P(__file__).parent.parent / "pyproject.toml").read_text())
+    return str(data["project"]["version"])
+
+
 def test_version_exports() -> None:
-    assert tailor.__version__ == "0.5.0"
+    """__version__ used to be a stale hardcoded string (0.5.0 through
+    v0.9.0 releases). It must equal pyproject.toml, the release truth."""
+    assert tailor.__version__ == _pyproject_version()
 
 
 def test_cli_version() -> None:

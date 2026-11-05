@@ -330,5 +330,58 @@ def provenance(path: Path = typer.Argument(..., help="Path to a dataset.")) -> N
     console.print(render_ledger(read_ledger(path)))
 
 
+@app.command()
+def diff(
+    old: Path = typer.Argument(..., help="Path to the older dataset version."),
+    new: Path = typer.Argument(..., help="Path to the newer dataset version."),
+    json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Meta-level diff between two dataset versions (no decoding; exit 1 = differs)."""
+    import dataclasses
+
+    from tailor.diff import diff_datasets, render_diff
+
+    for p in (old, new):
+        snap = load_snapshot(p)
+        if not snap.readable:
+            console.print(f"[red]dataset unreadable: {p}[/red]")
+            raise typer.Exit(code=2)
+    report = diff_datasets(old, new)
+    if json_out:
+        console.print(json.dumps(dataclasses.asdict(report), indent=2, ensure_ascii=False))
+    else:
+        from rich.markdown import Markdown
+
+        console.print(Markdown(render_diff(report)))
+    raise typer.Exit(code=1 if report.has_differences() else 0)
+
+
+@app.command()
+def datasheet(
+    path: Path = typer.Argument(..., help="Path to a LeRobot-format dataset directory."),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Write the datasheet here (default: stdout)."
+    ),
+    profile: Path | None = typer.Option(
+        None, "--profile", "-p", help="YAML acceptance profile used for the acceptance section."
+    ),
+) -> None:
+    """Generate a delivery datasheet: overview, features, acceptance, lineage."""
+    from tailor.datasheet import build_datasheet
+    from tailor.profile import load_profile
+
+    snap = load_snapshot(path)
+    if not snap.readable:
+        console.print("[red]dataset unreadable[/red]")
+        raise typer.Exit(code=2)
+    prof = load_profile(profile) if profile else None
+    text = build_datasheet(path, run_all(snap, prof))
+    if output is None:
+        console.print(text)
+    else:
+        output.write_text(text)
+        console.print(f"datasheet written: {output}")
+
+
 if __name__ == "__main__":
     app()

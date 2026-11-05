@@ -9,16 +9,34 @@ label"): format compliance, metadata-vs-data consistency, integrity.
 """
 
 import json
+import math
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import numpy as np
 
 from tailor.loader import SUPPORTED_VERSIONS, _episode_parquet_path
 from tailor.model import CheckResult, DatasetSnapshot, Status
 
+if TYPE_CHECKING:
+    import av
+
 Expectation = Callable[[DatasetSnapshot, dict], CheckResult]
+
+T = TypeVar("T")
+
+# frames, width, height, fps, duration_s, interlaced, rotation_deg
+ProbeResult = tuple[int, int, int, float | None, float | None, bool | None, float | None]
+
+# black-edge thresholds: grey level counts as dark below 24/255; a frame is
+# "black" when ≥98% of its pixels are dark (compression noise keeps a few alive)
+BLACK_DARK_LEVEL = 24
+BLACK_DARK_FRAC = 0.98
+
+# the deep content scan samples Laplacian sharpness every Nth frame (a full
+# per-frame Laplacian triples decode cost for no extra signal)
+BLUR_EVERY = 5
 
 
 def _ok(name: str, message: str = "") -> CheckResult:
@@ -89,7 +107,7 @@ def check_episodes_metadata(snap: DatasetSnapshot, cfg: dict | None = None) -> C
     return _ok("episodes_metadata", f"{len(snap.episodes)} episodes")
 
 
-def check_episode_files_exist(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+def check_episode_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
     if not (snap.root / "data").is_dir():
         return _skip("episode_files", "data/ not on disk (meta-only run? use --full)")
@@ -438,6 +456,71 @@ def _video_keys(info: dict) -> list[str]:
     return [key for key, feat in info.get("features", {}).items() if feat.get("dtype") == "video"]
 
 
+def _stream_fps(stream: "av.VideoStream") -> float | None:
+    """Container-declared fps, preferring average_rate over codec framerate."""
+    rate = getattr(stream, "average_rate", None) or stream.codec_context.framerate
+    if rate is None or rate <= 0:
+        return None
+    return float(rate)
+
+
+def _stream_duration_s(
+    stream: "av.VideoStream", container: "av.container.InputContainer"
+) -> float | None:
+    """Duration in seconds from the stream header, else the container header."""
+    if stream.duration is not None and stream.time_base:
+        return float(stream.duration * stream.time_base)
+    if container.duration is not None:
+        return float(container.duration) / 1_000_000.0
+    return None
+
+
+def _rotation_degrees(stream: "av.VideoStream") -> float | None:
+    """Display rotation from side data / legacy metadata; None when upright.
+
+    MP4 writers store a displaymatrix; older files used a plain 'rotate'
+    tag. Both are honored — players apply them, most training loaders
+    don't, so a rotated file silently trains on sideways frames.
+    """
+    side = getattr(stream, "side_data", None) or {}
+    matrix = side.get("displaymatrix")
+    if matrix is not None:
+        identity = (1, 0, 0, 0, 1, 0, 0, 0, 1)
+        if tuple(matrix[:9]) == identity:
+            return None
+        return round(-math.degrees(math.atan2(matrix[3], matrix[0]))) % 360
+    legacy = (getattr(stream, "metadata", None) or {}).get("rotate")
+    if legacy is not None:
+        try:
+            deg = float(legacy) % 360
+        except ValueError:
+            return None
+        return deg or None
+    return None
+
+
+def _interlaced(stream: "av.VideoStream") -> bool | None:
+    """True when the stream is flagged interlaced; None when undeterminable."""
+    fo = getattr(getattr(stream, "codec_context", None), "field_order", None)
+    if fo is None:
+        return None
+    text = str(fo).upper()
+    if text.isdigit():
+        return int(text) not in (0, 1)  # FFmpeg: 0 unknown, 1 progressive
+    return text not in ("NONE", "UNKNOWN", "PROGRESSIVE", "UNSPECIFIED")
+
+
+def _duration_gap_ratio(frames: int, fps: float | None, duration_s: float | None) -> float | None:
+    """|decoded-length - header-duration| / header-duration, None when unknown.
+
+    frames/fps estimates what the file should decode to; a header claiming
+    much more means the recording was cut off before it finalised.
+    """
+    if not frames or fps is None or fps <= 0 or duration_s is None or duration_s <= 0:
+        return None
+    return abs(frames / fps - duration_s) / duration_s
+
+
 def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
     if not (snap.root / "videos").is_dir():
@@ -478,44 +561,19 @@ def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
     return _ok("video_files", f"{len(keys)} stream(s)")
 
 
-def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
-    cfg = cfg or {}
-    if not (snap.root / "videos").is_dir():
-        return _skip("video_streams", "videos/ not on disk (meta-only run? use --full)")
-    if snap.info is None or snap.episodes is None:
-        return _skip("video_streams", "info.json or episode metadata unreadable")
-    keys = _video_keys(snap.info)
-    if not keys:
-        return _ok("video_streams", "no video streams declared")
-    try:
-        import av
-    except ImportError:
-        return _skip("video_streams", "PyAV not installed (pip install av)")
-    tolerance = cfg.get("frame_tolerance", 1)
+def _video_probe_jobs(snap: DatasetSnapshot, keys: list[str]) -> list[tuple[str, str, Path, int]]:
+    """(key, label, path, expected_frames) for every declared video file on disk.
+
+    Shared by the stream probe and the head/tail decode: v3 episodes share
+    shards, so expected frames are summed per shard; v2 cuts one file per
+    episode. Missing files are skipped — video_files already reports them.
+    """
     version = (snap.info or {}).get("codebase_version")
-
-    def _probe(path: Path) -> tuple[int, int, int]:
-        # packet count == frame count only for CFR streams without B-frames;
-        # B-frame encodes may need decoded-frame counting (frame_tolerance
-        # absorbs the usual off-by-a-couple, not systematic differences).
-        # Container nb_frames metadata is trusted when present (MP4/H.264
-        # carries it): reading the header beats demuxing every packet.
-        container = av.open(str(path))
-        stream = container.streams.video[0]
-        nb = int(getattr(stream, "frames", 0) or 0)
-        frames = nb if nb > 0 else sum(1 for p in container.demux(video=0) if p.dts is not None)
-        w, h = stream.codec_context.width, stream.codec_context.height
-        container.close()
-        return frames, w, h
-
-    # collect probe jobs first, run them in parallel (av releases the GIL),
-    # then judge — video probing dominates wall time on video-heavy datasets
-    jobs: list[tuple[str, str, Path, int]] = []  # (key, label, path, expected)
+    jobs: list[tuple[str, str, Path, int]] = []
+    if snap.episodes is None:
+        return jobs
     for key in keys:
-        shape = snap.info["features"][key].get("shape", [])
         if version == "v3.0":
-            # episodes share shards: expected frames = sum of lengths pointing
-            # at the same (chunk, file)
             shards: dict[tuple, list] = {}
             for ep in snap.episodes:
                 c, f = ep.get(f"videos/{key}/chunk_index"), ep.get(f"videos/{key}/file_index")
@@ -524,7 +582,7 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
             for (c, f), lengths in shards.items():
                 path = snap.root / "videos" / key / f"chunk-{c:03d}" / f"file-{f:03d}.mp4"
                 if not path.is_file():
-                    continue  # already reported by video_files
+                    continue
                 jobs.append((key, path.name, path, sum(lengths)))
         else:
             for ep in snap.episodes:
@@ -539,6 +597,47 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
                 if not path.is_file():
                     continue
                 jobs.append((key, f"ep {idx}", path, ep.get("length", 0)))
+    return jobs
+
+
+def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    cfg = cfg or {}
+    if not (snap.root / "videos").is_dir():
+        return _skip("video_streams", "videos/ not on disk (meta-only run? use --full)")
+    if snap.info is None or snap.episodes is None:
+        return _skip("video_streams", "info.json or episode metadata unreadable")
+    keys = _video_keys(snap.info)
+    if not keys:
+        return _ok("video_streams", "no video streams declared")
+    try:
+        import av
+    except ImportError:
+        return _skip("video_streams", "PyAV not installed (pip install av)")
+    tolerance = cfg.get("frame_tolerance", 1)
+
+    def _probe(
+        path: Path,
+    ) -> tuple[int, int, int, float | None, float | None, bool | None, float | None]:
+        # packet count == frame count only for CFR streams without B-frames;
+        # B-frame encodes may need decoded-frame counting (frame_tolerance
+        # absorbs the usual off-by-a-couple, not systematic differences).
+        # Container nb_frames metadata is trusted when present (MP4/H.264
+        # carries it): reading the header beats demuxing every packet.
+        container = av.open(str(path))
+        stream = container.streams.video[0]
+        nb = int(getattr(stream, "frames", 0) or 0)
+        frames = nb if nb > 0 else sum(1 for p in container.demux(video=0) if p.dts is not None)
+        w, h = stream.codec_context.width, stream.codec_context.height
+        fps = _stream_fps(stream)
+        duration = _stream_duration_s(stream, container)
+        interlaced = _interlaced(stream)
+        rotation = _rotation_degrees(stream)
+        container.close()
+        return frames, w, h, fps, duration, interlaced, rotation
+
+    # collect probe jobs first, run them in parallel (av releases the GIL),
+    # then judge — video probing dominates wall time on video-heavy datasets
+    jobs = _video_probe_jobs(snap, keys)
 
     problems: list[str] = []
     import os
@@ -547,28 +646,369 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     workers = min(4, os.cpu_count() or 1)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         probed = list(pool.map(lambda j: _safe_probe(_probe, j[2]), jobs))
+    fps_rel_tol = cfg.get("fps_rel_tol", 0.05)
+    duration_tol = cfg.get("duration_tol", 0.02)
     for (key, label, _path, expected), result in zip(jobs, probed, strict=True):
         shape = snap.info["features"][key].get("shape", [])
         if isinstance(result, Exception):
             problems.append(f"{key}: {label} video undecodable")
             continue
-        frames, w, h = result
+        frames, w, h, fps, duration, interlaced, rotation = result
         if abs(frames - expected) > tolerance:
             problems.append(f"{key} {label}: {frames} frames vs {expected} episode frames")
         if len(shape) >= 2 and (h, w) != (shape[0], shape[1]):
             problems.append(f"{key} {label}: {w}x{h} vs declared {shape[1]}x{shape[0]}")
+        # declared fps (info.json features) vs container fps: a silent unit
+        # or profile mismatch breaks timestamp reconstruction downstream
+        declared_fps = snap.info["features"][key].get("fps")
+        if fps and declared_fps and abs(fps - declared_fps) > max(fps_rel_tol * declared_fps, 0.5):
+            problems.append(
+                f"{key} {label}: container {fps:g} fps vs declared {declared_fps:g} fps"
+            )
+        # frames/fps vs header duration: a header claiming far more than the
+        # file decodes to means the recording was cut off before finalising
+        gap = _duration_gap_ratio(frames, fps, duration)
+        if gap is not None and gap > duration_tol:
+            problems.append(
+                f"{key} {label}: decodes to ~{frames / (fps or 1):.1f}s but header "
+                f"says {duration:.1f}s ({gap:.0%} truncated)"
+            )
+        if rotation:
+            problems.append(
+                f"{key} {label}: rotation {rotation:g}° metadata (players rotate, loaders don't)"
+            )
+        if interlaced:
+            problems.append(f"{key} {label}: interlaced stream (loaders assume progressive)")
     if problems:
         return _fail("video_streams", f"{len(problems)} stream problem(s)", problems=problems[:10])
     return _ok("video_streams", f"{len(keys)} stream(s) probed")
 
 
-def _safe_probe(
-    probe: "Callable[[Path], tuple[int, int, int]]", path: Path
-) -> tuple[int, int, int] | Exception:
+def _safe_probe(probe: "Callable[[Path], T]", path: Path) -> "T | Exception":
     try:
         return probe(path)
     except Exception as e:  # undecodable container must fail the check, not the run
         return e
+
+
+def _decode_edge_frames(
+    path: Path, head: int, tail: int, fps_hint: float | None
+) -> tuple[list[bool], list[bool]]:
+    """Per-frame 'is black' flags for the first/last frames of one file.
+
+    Cheap content probe: only the head and tail are decoded (the classic
+    'camera never started' / 'recording cut off' failures live at the
+    edges), so cost is O(head+tail), not O(file).
+    """
+    import av
+
+    def _black_flags(container: "av.container.InputContainer", n: int) -> list[bool]:
+        flags: list[bool] = []
+        for frame in container.decode(container.streams.video[0]):
+            gray = frame.reformat(format="gray").to_ndarray()
+            dark = float((gray < BLACK_DARK_LEVEL).mean())
+            flags.append(dark >= BLACK_DARK_FRAC)
+            if len(flags) >= n:
+                break
+        return flags
+
+    container = av.open(str(path))
+    try:
+        head_flags = _black_flags(container, head)
+        tail_flags: list[bool] = []
+        stream = container.streams.video[0]
+        duration = _stream_duration_s(stream, container)
+        fps = fps_hint or _stream_fps(stream) or 30.0
+        if duration and tail:
+            # seek into the file by container timestamp (µs), land before the
+            # target so the tail window is fully covered after keyframe realign
+            target = max(0.0, duration - (tail / fps) - 1.0)
+            container.seek(int(target * 1_000_000))
+            tail_flags = _black_flags(container, tail * 3)[-tail:]
+        return head_flags, tail_flags
+    finally:
+        container.close()
+
+
+def check_video_black(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    """Black openings/closings: lens cap left on, camera that never started.
+
+    Decodes only the first/last few frames of each video file — the edge
+    failures that frame counts and metadata cannot see. A mid-file black
+    span is out of scope (needs a full decode); this check is the cheap
+    80% of that value.
+    """
+    cfg = cfg or {}
+    if not (snap.root / "videos").is_dir():
+        return _skip("video_black", "videos/ not on disk (meta-only run? use --full)")
+    if snap.info is None or snap.episodes is None:
+        return _skip("video_black", "info.json or episode metadata unreadable")
+    keys = _video_keys(snap.info)
+    if not keys:
+        return _ok("video_black", "no video streams declared")
+    try:
+        import av  # noqa: F401 — capability probe, same gate as video_streams
+    except ImportError:
+        return _skip("video_black", "PyAV not installed (pip install av)")
+
+    head = int(cfg.get("head_frames", 24))
+    tail = int(cfg.get("tail_frames", 24))
+    dark_share = float(cfg.get("dark_share", 0.9))
+    jobs = _video_probe_jobs(snap, keys)
+    problems: list[str] = []
+    for key, label, path, _expected in jobs:
+        result = _safe_probe(lambda p: _decode_edge_frames(p, head, tail, None), path)
+        if isinstance(result, Exception):
+            problems.append(f"{key}: {label} undecodable")
+            continue
+        head_flags, tail_flags = result
+        if head_flags and (sum(head_flags) / len(head_flags)) >= dark_share:
+            problems.append(
+                f"{key} {label}: black opening ({sum(head_flags)}/{len(head_flags)} frames)"
+            )
+        if tail_flags and (sum(tail_flags) / len(tail_flags)) >= dark_share:
+            problems.append(
+                f"{key} {label}: black closing ({sum(tail_flags)}/{len(tail_flags)} frames)"
+            )
+    if problems:
+        return _fail(
+            "video_black", f"{len(problems)} black-edge problem(s)", problems=problems[:10]
+        )
+    return _ok("video_black", f"{len(keys)} stream(s), edges not black")
+
+
+def _decode_content_measures(path: Path, gray_width: int = 64) -> dict | None:
+    """One full decode: per-frame brightness/dark share/MAD/repeat flags,
+    Laplacian variance every BLUR_EVERY frames, timestamps.
+
+    Mirrors rdq's decode_pass, minus optical flow / phash (camera-swap and
+    duplicate curation are out of scope for an acceptance gate).
+    """
+    import av
+
+    out: dict = {
+        "t": [],
+        "mean": [],
+        "std": [],
+        "dark": [],
+        "mad": [],
+        "ident": [],
+        "exact": [],
+        "lap_t": [],
+        "lap": [],
+    }
+    try:
+        container = av.open(str(path))
+    except Exception:
+        return None
+    stream = container.streams.video[0]
+    tb = float(stream.time_base) if stream.time_base else None
+    prev16: np.ndarray | None = None
+    prev_id: np.ndarray | None = None
+    t0 = None
+    for i, fr in enumerate(container.decode(stream)):
+        t = (
+            fr.pts * tb
+            if (fr.pts is not None and tb)
+            else (out["t"][-1] + 1 / 30 if out["t"] else 0.0)
+        )
+        t0 = t if t0 is None else t0
+        t -= t0
+        aw = max(16, min(gray_width, fr.width - fr.width % 2))
+        h2 = max(2, int(round(fr.height * aw / fr.width / 2) * 2))
+        g = fr.reformat(width=aw, height=h2, format="gray").to_ndarray()
+        g16 = g.astype(np.int16)
+        out["t"].append(t)
+        out["mean"].append(float(g.mean()))
+        out["std"].append(float(g.std()))
+        out["dark"].append(float((g < BLACK_DARK_LEVEL).mean()))
+        if prev16 is not None:
+            out["mad"].append(float(np.abs(g16 - prev16).mean() / 255))
+        else:
+            out["mad"].append(float("nan"))
+        if prev_id is not None and prev_id.shape == g.shape:
+            dif = np.abs(g16 - prev_id)
+            out["ident"].append(bool(np.count_nonzero(dif > 2) <= 0.0005 * g.size))
+            out["exact"].append(bool(not dif.any()))
+        else:
+            out["ident"].append(False)
+            out["exact"].append(False)
+        if i % BLUR_EVERY == 0:
+            f = g.astype(np.float32)
+            lap = (
+                np.roll(f, 1, 0) + np.roll(f, -1, 0) + np.roll(f, 1, 1) + np.roll(f, -1, 1) - 4 * f
+            )
+            out["lap_t"].append(t)
+            out["lap"].append(float(lap[1:-1, 1:-1].var()))
+        prev16, prev_id = g16, g
+    container.close()
+    return out
+
+
+def _true_runs(t: "np.ndarray", flags: "np.ndarray", min_len: float) -> list[tuple[float, float]]:
+    """[(start, end)] for consecutive-True stretches lasting ≥ min_len seconds."""
+    spans: list[tuple[float, float]] = []
+    start = None
+    for i, flag in enumerate(flags):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            if t[i - 1] - t[start] >= min_len:
+                spans.append((float(t[start]), float(t[i])))
+            start = None
+    if start is not None and t[len(flags) - 1] - t[start] >= min_len:
+        spans.append((float(t[start]), float(t[len(flags) - 1])))
+    return spans
+
+
+def _content_problems(measures: dict, base_lap: float, cfg: dict) -> list[str]:
+    """Content-level problems in one decoded segment (seconds + reason)."""
+    t = np.asarray(measures["t"], dtype=float)
+    if len(t) < 2:
+        return []
+    problems: list[str] = []
+    dt = float(np.median(np.diff(t)))
+    dur = float(t[-1]) + dt
+    dark = np.asarray(measures["dark"], dtype=float) >= 0.98
+    std = np.asarray(measures["std"], dtype=float)
+    mean = np.asarray(measures["mean"], dtype=float)
+    ident = np.asarray(measures["ident"], dtype=bool)
+    exact = np.asarray(measures["exact"], dtype=bool)
+    # frozen: repeated frames, and a stalled camera's encoder emits mostly
+    # bit-exact repeats — a quarter exact separates stall from a still scene
+    for a, b in _true_runs(t, ident, float(cfg.get("frozen_min_s", 1.0))):
+        m = (t >= a) & (t < b)
+        if m.any() and float(exact[m].mean()) >= 0.25:
+            problems.append(f"frozen {b - a:.1f}s from {a:.1f}s (repeated frames)")
+    # black spans away from the file edges (edges are video_black's job)
+    for a, b in _true_runs(t, dark, 0.5):
+        if a > 0.5 and b < dur - 0.5:
+            problems.append(f"black {b - a:.1f}s from {a:.1f}s (mid-file)")
+    # flat frame while lit: lens covered / featureless scene
+    lit = mean[~dark]
+    norm = float(np.median(lit)) if len(lit) else 0.0
+    cover = (std < 8.0) & (mean < 0.7 * norm) & ~dark if norm else np.zeros(len(t), bool)
+    for a, b in _true_runs(t, cover, float(cfg.get("flat_min_s", 1.0))):
+        problems.append(f"covered {b - a:.1f}s from {a:.1f}s (flat and dark: lens blocked)")
+    over = (mean > 245.0) & (std < 10.0)
+    for a, b in _true_runs(t, over, 1.0):
+        problems.append(f"overexposed {b - a:.1f}s from {a:.1f}s (washed out)")
+    # persistent blur: Laplacian variance far below the dataset baseline,
+    # excluding high-motion frames (motion blur is physics, not a defect)
+    lap_t = np.asarray(measures["lap_t"], dtype=float)
+    lap = np.asarray(measures["lap"], dtype=float)
+    if base_lap and len(lap):
+        soft = (
+            np.interp(t, lap_t, (lap < float(cfg.get("blur_rel", 0.25)) * base_lap).astype(float))
+            > 0.5
+        )
+        mad = np.nan_to_num(np.asarray(measures["mad"], dtype=float), nan=1.0)
+        calm = np.interp(t, t, mad) < 0.01
+        for a, b in _true_runs(t, soft & calm, 1.0):
+            problems.append(f"blur {b - a:.1f}s from {a:.1f}s (out of focus / dirty lens)")
+    return problems
+
+
+def _video_segments(
+    snap: DatasetSnapshot, keys: list[str]
+) -> list[tuple[str, str, Path, float | None, float | None]]:
+    """(key, label, path, start_s, end_s) — v2 one file per episode, v3
+    episodes cut from shared shards by their metadata timestamps."""
+    version = (snap.info or {}).get("codebase_version")
+    out: list[tuple[str, str, Path, float | None, float | None]] = []
+    if snap.episodes is None:
+        return out
+    for key in keys:
+        if version == "v3.0":
+            for ep in snap.episodes:
+                c = ep.get(f"videos/{key}/chunk_index")
+                f = ep.get(f"videos/{key}/file_index")
+                t0, t1 = (
+                    ep.get(f"videos/{key}/from_timestamp"),
+                    ep.get(f"videos/{key}/to_timestamp"),
+                )
+                if not all(isinstance(v, (int, float)) for v in (c, f, t0, t1)):
+                    continue
+                ci, fi = cast(int, c), cast(int, f)
+                path = snap.root / "videos" / key / f"chunk-{ci:03d}" / f"file-{fi:03d}.mp4"
+                if path.is_file():
+                    out.append(
+                        (
+                            key,
+                            f"{path.name} ep {ep.get('episode_index')}",
+                            path,
+                            cast(float, t0),
+                            cast(float, t1),
+                        )
+                    )
+        else:
+            for ep in snap.episodes:
+                idx = ep.get("episode_index", -1)
+                path = (
+                    snap.root
+                    / "videos"
+                    / f"chunk-{idx // 1000:03d}"
+                    / key
+                    / f"episode_{idx:06d}.mp4"
+                )
+                if path.is_file():
+                    out.append((key, f"ep {idx}", path, None, None))
+    return out
+
+
+def check_video_content(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    """Full-decode content scan: frozen frames, mid-file black, covered
+    lens, over-exposure, persistent blur. OFF by default — a profile must
+    opt in (any config entry for this check enables it), because a full
+    decode is minutes per GB, not the seconds a gate can afford.
+    """
+    if not cfg:
+        return _skip("video_content", "full-decode check; enable via a profile entry")
+    if not (snap.root / "videos").is_dir():
+        return _skip("video_content", "videos/ not on disk")
+    if snap.info is None:
+        return _skip("video_content", "info.json unreadable")
+    keys = _video_keys(snap.info)
+    if not keys:
+        return _ok("video_content", "no video streams declared")
+    try:
+        import av  # noqa: F401 — same capability gate as the other video checks
+    except ImportError:
+        return _skip("video_content", "PyAV not installed (pip install av)")
+
+    segs = _video_segments(snap, keys)
+    decoded: dict[Path, dict | None] = {}
+    for _key, _label, path, _a, _b in segs:
+        if path not in decoded:
+            decoded[path] = _decode_content_measures(path)
+    laps = [v for m in decoded.values() if m for v in m["lap"]]
+    base_lap = float(np.median(laps)) if laps else 0.0
+    problems: list[str] = []
+    for key, label, path, a, b in segs:
+        m = decoded.get(path)
+        if m is None:
+            problems.append(f"{key}: {label} undecodable")
+            continue
+        if a is not None and b is not None:
+            tt = np.asarray(m["t"], dtype=float)
+            mask = (tt >= a - 1e-6) & (tt < b - 1e-6)
+            if not mask.any():
+                continue
+            lt = np.asarray(m["lap_t"], dtype=float)
+            lmask = (lt >= a - 1e-6) & (lt < b - 1e-6)
+            seg = {"t": (tt[mask] - a).tolist(), "lap_t": (lt[lmask] - a).tolist()}
+            seg["lap"] = np.asarray(m["lap"])[lmask].tolist()
+            # per-frame series slice on the frame mask; lap is sampled every
+            # BLUR_EVERY frames and gets its own mask above
+            for k2 in ("mean", "std", "dark", "mad", "ident", "exact"):
+                seg[k2] = np.asarray(m[k2])[mask].tolist()
+        else:
+            seg = m
+        for p in _content_problems(seg, base_lap, cfg):
+            problems.append(f"{key} {label}: {p}")
+    if problems:
+        return _fail("video_content", f"{len(problems)} content problem(s)", problems=problems[:10])
+    return _ok("video_content", f"{len(segs)} segment(s) scanned, content clean")
 
 
 def check_zero_variance(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
@@ -830,7 +1270,7 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_codebase_version,
         check_fps,
         check_episodes_metadata,
-        check_episode_files_exist,
+        check_episode_files,
         check_total_frames,
         check_episode_lengths,
         check_task_indices,
@@ -841,6 +1281,8 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_action_quality,
         check_video_files,
         check_video_streams,
+        check_video_black,
+        check_video_content,
         check_video_sync,
         check_zero_variance,
         check_schema_consistency,

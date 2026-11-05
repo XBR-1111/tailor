@@ -6,6 +6,56 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-11-05
+
+### Added
+- `tailor diff OLD NEW`: meta-level comparison of two dataset versions —
+  structure, feature-schema drift, episode set/length changes, video pointer
+  and file-size changes (a re-encode signal), stats drift. No decoding, no
+  parquet parsing. Exit 0 identical / 1 differs, so a re-delivery is gated
+  on "did anything change".
+- `tailor datasheet PATH`: delivery document from one check-suite run —
+  overview (scale, footage hours), feature table, acceptance verdicts,
+  ledger lineage. `-o` writes a file; feed it to a dataset card or a
+  handoff ticket.
+- `video_content` check (OFF by default): full-decode content scan — frozen
+  frames (near-identical run with ≥25% bit-exact repeats, distinguishing a
+  stalled camera from a still scene), mid-file black spans, covered lens,
+  over-exposure, persistent blur relative to the dataset's own Laplacian
+  baseline with motion frames excluded. Opt in via
+  `video_content: {enabled: true}` in a profile; absent = SKIP, so default
+  runs stay at the seconds budget. v3 shards are decoded once and episodes
+  judged on their metadata segments.
+- `video_black` check: black openings/closings per video file (lens cap left
+  on, camera that never started). Decodes only the first/last few frames —
+  edge failures that frame counts and metadata cannot see. Tunables:
+  `head_frames` (24), `tail_frames` (24), `dark_share` (0.9).
+- `video_streams` gained four header-level sub-checks at zero decode cost:
+  container fps vs the fps declared in `info.json` features (`fps_rel_tol`,
+  default 5% — catches silent profile mismatches before they corrupt
+  timestamp reconstruction), header duration vs frames/fps (`duration_tol`,
+  default 2% — truncated recordings), rotation metadata (players rotate,
+  loaders don't), and interlaced stream flags.
+- Reference docs under `docs/`: `configuration.md` (every tunable with
+  defaults, merge semantics, validation rules, starter recipes),
+  `checks.md` (per-check logic, verdict capability, corruption repro),
+  `cli.md` (every command, flag, exit code, JSON payload).
+- `tests/test_docs.py` pins the docs to the code: tunable tables must equal
+  DEFAULTS, every check must appear with its exact registry name, cited
+  corruptions must exist, CLI flags must match `cli.py` in both directions.
+- Fixture videos now carry deterministic grey-noise content (they were solid
+  black before — fine when only counts were checked, wrong once content is),
+  and the fixture `info.json` declares per-video `fps` like real datasets.
+
+### Fixed
+- The `episode_files` check was registered as `episode_files_exist`, so a
+  profile could not address it (`unknown check` error) while every doc and
+  test called it `episode_files`. Renamed the checker to match its output
+  name; `tests/test_docs.py` now asserts registry keys equal reported names
+  for all 25 checks.
+- The fixture generator wrote BOTH the v2 and v3 video layouts into every
+  dataset (orphan files nobody read until `diff` started scanning disk).
+
 ## [0.9.0] — 2026-11-01
 
 ### Fixed — found by validating against real v2.x datasets

@@ -35,7 +35,7 @@ def test_clean_fixture_is_accepted(tmp_path: Path) -> None:
     st = statuses(make_fixture(tmp_path))
     # structural SKIPs are not defects: training_readiness needs chunk_size
     # configured, video_sync has no per-camera timestamps to compare on v2.1
-    structural_skip = {"training_readiness", "video_sync"}
+    structural_skip = {"training_readiness", "video_sync", "video_content"}
     bad = {
         n: s
         for n, s in st.items()
@@ -44,7 +44,7 @@ def test_clean_fixture_is_accepted(tmp_path: Path) -> None:
     assert not bad, bad
     snap = load_snapshot(make_fixture(tmp_path))
     results = run_all(snap)
-    assert len(results) == 23
+    assert len(results) == 25  # one more check per release; keep in sync with EXPECTATIONS
 
 
 def test_nan_is_caught(tmp_path: Path) -> None:
@@ -98,7 +98,7 @@ def test_clean_fixture_is_accepted_both_formats(tmp_path: Path, fmt: str) -> Non
     st = statuses(make_fixture(tmp_path, fmt=fmt))
     # structural SKIPs by design: training_readiness needs chunk_size
     # configured; video_sync has no per-camera timestamps on v2.x
-    structural_skip = {"training_readiness", "video_sync"}
+    structural_skip = {"training_readiness", "video_sync", "video_content"}
     bad = {
         n: s
         for n, s in st.items()
@@ -120,6 +120,8 @@ def test_clean_fixture_is_accepted_both_formats(tmp_path: Path, fmt: str) -> Non
         ("stats-mismatch", "stats_recompute"),
         ("missing-video", "video_files"),
         ("video-mismatch", "video_streams"),
+        ("video-fps", "video_streams"),
+        ("video-blackout", "video_black"),
         ("zero-variance", "zero_variance"),
         ("dropped-frames", "frame_continuity"),
         ("duplicate-episode", "duplicate_episodes"),
@@ -209,3 +211,62 @@ def test_sample_last_covers_tail(tmp_path: Path) -> None:
     tail = load_snapshot(ds, max_episodes=1, sample="last")
     assert sorted(head.frames) == [0]
     assert sorted(tail.frames) == [2]
+
+
+def test_rotation_degrees_reads_displaymatrix_and_legacy_tag() -> None:
+    """90° displaymatrix, identity matrix and legacy 'rotate' tag."""
+    from types import SimpleNamespace
+
+    from tailor.expectations import _rotation_degrees
+
+    cw90 = SimpleNamespace(side_data={"displaymatrix": [0, 1, 0, -1, 0, 0, 0, 0, 1]}, metadata={})
+    assert _rotation_degrees(cw90) == 90
+    upright = SimpleNamespace(side_data={"displaymatrix": [1, 0, 0, 0, 1, 0, 0, 0, 1]}, metadata={})
+    assert _rotation_degrees(upright) is None
+    legacy = SimpleNamespace(side_data={}, metadata={"rotate": "180"})
+    assert _rotation_degrees(legacy) == 180
+
+
+def test_interlaced_flag_detection() -> None:
+    from types import SimpleNamespace
+
+    from tailor.expectations import _interlaced
+
+    def stream(field_order: object) -> SimpleNamespace:
+        return SimpleNamespace(codec_context=SimpleNamespace(field_order=field_order))
+
+    assert _interlaced(stream("TT")) is True
+    assert _interlaced(stream("PROGRESSIVE")) is False
+    assert _interlaced(stream(2)) is True  # FFmpeg enum: 2 = TT
+    assert _interlaced(stream(1)) is False  # 1 = progressive
+    assert _interlaced(stream(None)) is None
+
+
+def test_duration_gap_ratio_math() -> None:
+    from tailor.expectations import _duration_gap_ratio
+
+    # 100 frames at 10 fps = 10s of content; header claims 12s → 1/6 short
+    assert _duration_gap_ratio(100, 10.0, 12.0) == pytest.approx(1 / 6)
+    assert _duration_gap_ratio(100, 10.0, 10.05) == pytest.approx(0.05 / 10.05)
+    assert _duration_gap_ratio(100, None, 12.0) is None
+    assert _duration_gap_ratio(0, 10.0, 12.0) is None
+    assert _duration_gap_ratio(100, 10.0, None) is None
+
+
+def test_video_freeze_caught_by_deep_content_check(tmp_path: Path) -> None:
+    """video_content is OFF by default (full decode) and must be opted in."""
+    for fmt in ("v2.1", "v3.0"):
+        ds = make_fixture(tmp_path / fmt, "video-freeze", fmt=fmt)
+        snap = load_snapshot(ds)
+        off = {r.name: r.status for r in run_all(snap)}
+        assert off["video_content"] == Status.SKIP
+        on = {r.name: r.status for r in run_all(snap, {"video_content": {"enabled": True}})}
+        assert on["video_content"] == Status.FAIL, fmt
+
+
+def test_video_content_clean_passes_with_profile(tmp_path: Path) -> None:
+    """No false positives: a clean fixture passes the deep scan when enabled."""
+    ds = make_fixture(tmp_path, fmt="v2.1")
+    snap = load_snapshot(ds)
+    on = {r.name: r.status for r in run_all(snap, {"video_content": {"enabled": True}})}
+    assert on["video_content"] == Status.PASS

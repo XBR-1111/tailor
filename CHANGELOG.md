@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `video_content` check (OFF by default): full-decode content scan — frozen
+  frames (near-identical run with ≥25% bit-exact repeats, distinguishing a
+  stalled camera from a still scene), mid-file black spans, covered lens,
+  over-exposure, persistent blur relative to the dataset's own Laplacian
+  baseline with motion frames excluded. Opt in via
+  `video_content: {enabled: true}` in a profile; absent = SKIP, so default
+  runs stay at the seconds budget. v3 shards are decoded once and episodes
+  judged on their metadata segments.
 - `video_black` check: black openings/closings per video file (lens cap left
   on, camera that never started). Decodes only the first/last few frames —
   edge failures that frame counts and metadata cannot see. Tunables:

@@ -40,6 +40,7 @@ CORRUPTIONS = (
     "video-mismatch",  # video shard short by 5 frames vs episode lengths
     "video-fps",  # container encoded at half the declared fps (5 vs 10)
     "video-blackout",  # video starts black (lens cap on / camera never started)
+    "video-freeze",  # mid-video repeated frames (deep content check only)
     "zero-variance",  # state dim 0 frozen at a constant (dead sensor)
     "schema-drop",  # v2 only: episode 1 parquet loses the observation.state column
     "dropped-frames",  # episode 0 loses frames 8-10: holes in frame_index, rows<length
@@ -212,17 +213,28 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
     # check decodes real content, so clean fixtures must not look black
     import av
 
-    def encode(path: Path, nframes: int, *, rate: int = FPS, black_prefix: int = 0) -> None:
+    def encode(
+        path: Path,
+        nframes: int,
+        *,
+        rate: int = FPS,
+        black_prefix: int = 0,
+        freeze_range: tuple[int, int] | None = None,
+    ) -> None:
         container = av.open(str(path), mode="w")
         stream = container.add_stream("libx264", rate=rate)
         stream.width = stream.height = VIDEO_SIZE
         stream.pix_fmt = "yuv420p"
         rng = np.random.default_rng(1234)
+        frozen_arr = None
         for i in range(nframes):
-            if i < black_prefix:
+            if freeze_range and freeze_range[0] <= i < freeze_range[1] and frozen_arr is not None:
+                arr = frozen_arr  # camera stall: the same picture re-encoded
+            elif i < black_prefix:
                 arr = np.zeros((VIDEO_SIZE, VIDEO_SIZE, 3), dtype=np.uint8)
             else:
                 arr = rng.integers(60, 200, (VIDEO_SIZE, VIDEO_SIZE, 3), dtype=np.uint8)
+                frozen_arr = arr
             frame = av.VideoFrame.from_ndarray(arr, format="rgb24")
             for packet in stream.encode(frame):
                 container.mux(packet)
@@ -241,7 +253,14 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
             # file is the head window, so the entire episode must be black
             black = EP_LENGTH if (corrupt == "video-blackout" and ep == 0) else 0
             rate = FPS // 2 if (corrupt == "video-fps" and ep == 0) else FPS
-            encode(vdir / f"episode_{ep:06d}.mp4", EP_LENGTH - short, rate=rate, black_prefix=black)
+            freeze = (8, EP_LENGTH) if (corrupt == "video-freeze" and ep == 1) else None
+            encode(
+                vdir / f"episode_{ep:06d}.mp4",
+                EP_LENGTH - short,
+                rate=rate,
+                black_prefix=black,
+                freeze_range=freeze,
+            )
         if corrupt == "missing-video":
             (vdir / "episode_000001.mp4").unlink()
     else:
@@ -252,7 +271,15 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
         # 30 black frames > head_frames(24): the shard's head window is black
         black = 30 if corrupt == "video-blackout" else 0
         rate = FPS // 2 if corrupt == "video-fps" else FPS
-        encode(vdir / "file-000.mp4", N_EPISODES * EP_LENGTH - short, rate=rate, black_prefix=black)
+        # ep1 spans global frames 20-39 in the shared shard; freeze 28-39
+        freeze = (28, 40) if corrupt == "video-freeze" else None
+        encode(
+            vdir / "file-000.mp4",
+            N_EPISODES * EP_LENGTH - short,
+            rate=rate,
+            black_prefix=black,
+            freeze_range=freeze,
+        )
         if corrupt == "missing-video":
             (vdir / "file-000.mp4").unlink()
         if corrupt == "video-desync":

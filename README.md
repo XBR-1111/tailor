@@ -187,6 +187,7 @@ change.
 | video_files | declared video streams missing on disk (v2 per-episode files, v3 shard pointers) |
 | video_streams | undecodable video; frame count vs episode lengths; resolution vs declared shape; container fps vs declared fps; header duration vs decodable content (truncated recordings); rotation metadata; interlaced streams |
 | video_black | black openings/closings — lens cap left on, camera that never started (decodes only the first/last frames of each file) |
+| video_content | **deep scan, OFF by default**: full decode per video, flags frozen frames (double threshold: near-identical run + ≥25% bit-exact), mid-file black, covered lens, over-exposure, persistent blur (Laplacian vs dataset baseline, motion excluded). Enable with `video_content: {enabled: true}` in a profile |
 | video_sync | cross-camera from/to timestamp drift in one episode (v3.0 metadata; stereo rigs without hardware sync) |
 | zero_variance | dims that never move (std < eps): normalization would divide by zero |
 | schema_consistency | column sets/dtypes drifting across episodes |

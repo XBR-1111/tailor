@@ -177,6 +177,7 @@ tailor check /data/dataset --profile my_requirements.yaml
 | video_files | 声明的视频流在磁盘上缺失（v2 按每集文件、v3 按分片指针查） |
 | video_streams | 视频不可解码；帧数与 episode 长度不符；分辨率与声明 shape 不符；容器 fps 与声明 fps 不符；头声明时长与可解码内容不符（录制中断）；旋转元数据；隔行扫描流 |
 | video_black | 开头/结尾黑屏——镜头盖没摘、相机没启动（每个文件只解码首尾少量帧） |
+| video_content | **深度扫描，默认关闭**：全解码每个视频，抓冻结帧（双门限：近似重复段 + ≥25% 位级相同）、中段黑屏、镜头遮挡、过曝、持续模糊（相对数据集 baseline 的 Laplacian，排除运动帧）。profile 里写 `video_content: {enabled: true}` 开启 |
 | video_sync | 同一 episode 内多相机 from/to 时间戳漂移（v3.0 元数据级；无硬件同步的相机组） |
 | zero_variance | 永不变化的维度（std < eps）：归一化会除零 |
 | schema_consistency | 跨 episode 的列集/dtype 漂移 |

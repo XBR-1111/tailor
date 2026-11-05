@@ -12,7 +12,7 @@ import json
 import math
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import numpy as np
 
@@ -33,6 +33,10 @@ ProbeResult = tuple[int, int, int, float | None, float | None, bool | None, floa
 # "black" when ≥98% of its pixels are dark (compression noise keeps a few alive)
 BLACK_DARK_LEVEL = 24
 BLACK_DARK_FRAC = 0.98
+
+# the deep content scan samples Laplacian sharpness every Nth frame (a full
+# per-frame Laplacian triples decode cost for no extra signal)
+BLUR_EVERY = 5
 
 
 def _ok(name: str, message: str = "") -> CheckResult:
@@ -773,6 +777,240 @@ def check_video_black(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
     return _ok("video_black", f"{len(keys)} stream(s), edges not black")
 
 
+def _decode_content_measures(path: Path, gray_width: int = 64) -> dict | None:
+    """One full decode: per-frame brightness/dark share/MAD/repeat flags,
+    Laplacian variance every BLUR_EVERY frames, timestamps.
+
+    Mirrors rdq's decode_pass, minus optical flow / phash (camera-swap and
+    duplicate curation are out of scope for an acceptance gate).
+    """
+    import av
+
+    out: dict = {
+        "t": [],
+        "mean": [],
+        "std": [],
+        "dark": [],
+        "mad": [],
+        "ident": [],
+        "exact": [],
+        "lap_t": [],
+        "lap": [],
+    }
+    try:
+        container = av.open(str(path))
+    except Exception:
+        return None
+    stream = container.streams.video[0]
+    tb = float(stream.time_base) if stream.time_base else None
+    prev16: np.ndarray | None = None
+    prev_id: np.ndarray | None = None
+    t0 = None
+    for i, fr in enumerate(container.decode(stream)):
+        t = (
+            fr.pts * tb
+            if (fr.pts is not None and tb)
+            else (out["t"][-1] + 1 / 30 if out["t"] else 0.0)
+        )
+        t0 = t if t0 is None else t0
+        t -= t0
+        aw = max(16, min(gray_width, fr.width - fr.width % 2))
+        h2 = max(2, int(round(fr.height * aw / fr.width / 2) * 2))
+        g = fr.reformat(width=aw, height=h2, format="gray").to_ndarray()
+        g16 = g.astype(np.int16)
+        out["t"].append(t)
+        out["mean"].append(float(g.mean()))
+        out["std"].append(float(g.std()))
+        out["dark"].append(float((g < BLACK_DARK_LEVEL).mean()))
+        if prev16 is not None:
+            out["mad"].append(float(np.abs(g16 - prev16).mean() / 255))
+        else:
+            out["mad"].append(float("nan"))
+        if prev_id is not None and prev_id.shape == g.shape:
+            dif = np.abs(g16 - prev_id)
+            out["ident"].append(bool(np.count_nonzero(dif > 2) <= 0.0005 * g.size))
+            out["exact"].append(bool(not dif.any()))
+        else:
+            out["ident"].append(False)
+            out["exact"].append(False)
+        if i % BLUR_EVERY == 0:
+            f = g.astype(np.float32)
+            lap = (
+                np.roll(f, 1, 0) + np.roll(f, -1, 0) + np.roll(f, 1, 1) + np.roll(f, -1, 1) - 4 * f
+            )
+            out["lap_t"].append(t)
+            out["lap"].append(float(lap[1:-1, 1:-1].var()))
+        prev16, prev_id = g16, g
+    container.close()
+    return out
+
+
+def _true_runs(t: "np.ndarray", flags: "np.ndarray", min_len: float) -> list[tuple[float, float]]:
+    """[(start, end)] for consecutive-True stretches lasting ≥ min_len seconds."""
+    spans: list[tuple[float, float]] = []
+    start = None
+    for i, flag in enumerate(flags):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            if t[i - 1] - t[start] >= min_len:
+                spans.append((float(t[start]), float(t[i])))
+            start = None
+    if start is not None and t[len(flags) - 1] - t[start] >= min_len:
+        spans.append((float(t[start]), float(t[len(flags) - 1])))
+    return spans
+
+
+def _content_problems(measures: dict, base_lap: float, cfg: dict) -> list[str]:
+    """Content-level problems in one decoded segment (seconds + reason)."""
+    t = np.asarray(measures["t"], dtype=float)
+    if len(t) < 2:
+        return []
+    problems: list[str] = []
+    dt = float(np.median(np.diff(t)))
+    dur = float(t[-1]) + dt
+    dark = np.asarray(measures["dark"], dtype=float) >= 0.98
+    std = np.asarray(measures["std"], dtype=float)
+    mean = np.asarray(measures["mean"], dtype=float)
+    ident = np.asarray(measures["ident"], dtype=bool)
+    exact = np.asarray(measures["exact"], dtype=bool)
+    # frozen: repeated frames, and a stalled camera's encoder emits mostly
+    # bit-exact repeats — a quarter exact separates stall from a still scene
+    for a, b in _true_runs(t, ident, float(cfg.get("frozen_min_s", 1.0))):
+        m = (t >= a) & (t < b)
+        if m.any() and float(exact[m].mean()) >= 0.25:
+            problems.append(f"frozen {b - a:.1f}s from {a:.1f}s (repeated frames)")
+    # black spans away from the file edges (edges are video_black's job)
+    for a, b in _true_runs(t, dark, 0.5):
+        if a > 0.5 and b < dur - 0.5:
+            problems.append(f"black {b - a:.1f}s from {a:.1f}s (mid-file)")
+    # flat frame while lit: lens covered / featureless scene
+    lit = mean[~dark]
+    norm = float(np.median(lit)) if len(lit) else 0.0
+    cover = (std < 8.0) & (mean < 0.7 * norm) & ~dark if norm else np.zeros(len(t), bool)
+    for a, b in _true_runs(t, cover, float(cfg.get("flat_min_s", 1.0))):
+        problems.append(f"covered {b - a:.1f}s from {a:.1f}s (flat and dark: lens blocked)")
+    over = (mean > 245.0) & (std < 10.0)
+    for a, b in _true_runs(t, over, 1.0):
+        problems.append(f"overexposed {b - a:.1f}s from {a:.1f}s (washed out)")
+    # persistent blur: Laplacian variance far below the dataset baseline,
+    # excluding high-motion frames (motion blur is physics, not a defect)
+    lap_t = np.asarray(measures["lap_t"], dtype=float)
+    lap = np.asarray(measures["lap"], dtype=float)
+    if base_lap and len(lap):
+        soft = (
+            np.interp(t, lap_t, (lap < float(cfg.get("blur_rel", 0.25)) * base_lap).astype(float))
+            > 0.5
+        )
+        mad = np.nan_to_num(np.asarray(measures["mad"], dtype=float), nan=1.0)
+        calm = np.interp(t, t, mad) < 0.01
+        for a, b in _true_runs(t, soft & calm, 1.0):
+            problems.append(f"blur {b - a:.1f}s from {a:.1f}s (out of focus / dirty lens)")
+    return problems
+
+
+def _video_segments(
+    snap: DatasetSnapshot, keys: list[str]
+) -> list[tuple[str, str, Path, float | None, float | None]]:
+    """(key, label, path, start_s, end_s) — v2 one file per episode, v3
+    episodes cut from shared shards by their metadata timestamps."""
+    version = (snap.info or {}).get("codebase_version")
+    out: list[tuple[str, str, Path, float | None, float | None]] = []
+    if snap.episodes is None:
+        return out
+    for key in keys:
+        if version == "v3.0":
+            for ep in snap.episodes:
+                c = ep.get(f"videos/{key}/chunk_index")
+                f = ep.get(f"videos/{key}/file_index")
+                t0, t1 = (
+                    ep.get(f"videos/{key}/from_timestamp"),
+                    ep.get(f"videos/{key}/to_timestamp"),
+                )
+                if not all(isinstance(v, (int, float)) for v in (c, f, t0, t1)):
+                    continue
+                ci, fi = cast(int, c), cast(int, f)
+                path = snap.root / "videos" / key / f"chunk-{ci:03d}" / f"file-{fi:03d}.mp4"
+                if path.is_file():
+                    out.append(
+                        (
+                            key,
+                            f"{path.name} ep {ep.get('episode_index')}",
+                            path,
+                            cast(float, t0),
+                            cast(float, t1),
+                        )
+                    )
+        else:
+            for ep in snap.episodes:
+                idx = ep.get("episode_index", -1)
+                path = (
+                    snap.root
+                    / "videos"
+                    / f"chunk-{idx // 1000:03d}"
+                    / key
+                    / f"episode_{idx:06d}.mp4"
+                )
+                if path.is_file():
+                    out.append((key, f"ep {idx}", path, None, None))
+    return out
+
+
+def check_video_content(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    """Full-decode content scan: frozen frames, mid-file black, covered
+    lens, over-exposure, persistent blur. OFF by default — a profile must
+    opt in (any config entry for this check enables it), because a full
+    decode is minutes per GB, not the seconds a gate can afford.
+    """
+    if not cfg:
+        return _skip("video_content", "full-decode check; enable via a profile entry")
+    if not (snap.root / "videos").is_dir():
+        return _skip("video_content", "videos/ not on disk")
+    if snap.info is None:
+        return _skip("video_content", "info.json unreadable")
+    keys = _video_keys(snap.info)
+    if not keys:
+        return _ok("video_content", "no video streams declared")
+    try:
+        import av  # noqa: F401 — same capability gate as the other video checks
+    except ImportError:
+        return _skip("video_content", "PyAV not installed (pip install av)")
+
+    segs = _video_segments(snap, keys)
+    decoded: dict[Path, dict | None] = {}
+    for _key, _label, path, _a, _b in segs:
+        if path not in decoded:
+            decoded[path] = _decode_content_measures(path)
+    laps = [v for m in decoded.values() if m for v in m["lap"]]
+    base_lap = float(np.median(laps)) if laps else 0.0
+    problems: list[str] = []
+    for key, label, path, a, b in segs:
+        m = decoded.get(path)
+        if m is None:
+            problems.append(f"{key}: {label} undecodable")
+            continue
+        if a is not None and b is not None:
+            tt = np.asarray(m["t"], dtype=float)
+            mask = (tt >= a - 1e-6) & (tt < b - 1e-6)
+            if not mask.any():
+                continue
+            lt = np.asarray(m["lap_t"], dtype=float)
+            lmask = (lt >= a - 1e-6) & (lt < b - 1e-6)
+            seg = {"t": (tt[mask] - a).tolist(), "lap_t": (lt[lmask] - a).tolist()}
+            seg["lap"] = np.asarray(m["lap"])[lmask].tolist()
+            # per-frame series slice on the frame mask; lap is sampled every
+            # BLUR_EVERY frames and gets its own mask above
+            for k2 in ("mean", "std", "dark", "mad", "ident", "exact"):
+                seg[k2] = np.asarray(m[k2])[mask].tolist()
+        else:
+            seg = m
+        for p in _content_problems(seg, base_lap, cfg):
+            problems.append(f"{key} {label}: {p}")
+    if problems:
+        return _fail("video_content", f"{len(problems)} content problem(s)", problems=problems[:10])
+    return _ok("video_content", f"{len(segs)} segment(s) scanned, content clean")
+
+
 def check_zero_variance(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
     if not snap.frames:
@@ -1044,6 +1282,7 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_video_files,
         check_video_streams,
         check_video_black,
+        check_video_content,
         check_video_sync,
         check_zero_variance,
         check_schema_consistency,

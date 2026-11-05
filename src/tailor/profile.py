@@ -32,6 +32,9 @@ DEFAULTS: dict = {
     "stats_recompute": {"mean_tolerance": 0.05},
     "video_streams": {"frame_tolerance": 1, "fps_rel_tol": 0.05, "duration_tol": 0.02},
     "video_black": {"head_frames": 24, "tail_frames": 24, "dark_share": 0.9},
+    # full-decode scan: OFF by default (minutes per GB). Opt in with
+    # `video_content: {enabled: true}` in your profile.
+    "video_content": {"enabled": False, "frozen_min_s": 1.0, "flat_min_s": 1.0, "blur_rel": 0.25},
     "video_sync": {"tolerance": 0.05},
     "zero_variance": {"eps": 1e-6},
     "training_readiness": {"chunk_size": None},

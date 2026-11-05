@@ -120,7 +120,6 @@ def make_v2(out: Path, corrupt: str | None) -> Path:
     if corrupt == "missing-file":
         (out / "data" / "chunk-000" / "episode_000001.parquet").unlink()
     _write_videos(out, "v2.1", corrupt)
-    _write_videos(out, "v3.0", corrupt)
     _write_stats(out, corrupt)
     if corrupt == "portability-junk":
         (out / "data" / "chunk-000" / "debug.log").write_text("oops")
@@ -196,7 +195,6 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
     if corrupt == "missing-file":
         (out / "data" / "chunk-000" / "file-000.parquet").unlink()
     _write_videos(out, "v3.0", corrupt)
-    _write_videos(out, "v3.0", corrupt)
     _write_stats(out, corrupt)
     if corrupt == "portability-junk":
         (out / "data" / "chunk-000" / "debug.log").write_text("oops")
@@ -213,9 +211,6 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
     # frames carry grey noise (rng-seeded, deterministic): the black-edge
     # check decodes real content, so clean fixtures must not look black
     import av
-
-    vdir = out / "videos" / VIDEO_KEY / "chunk-000"
-    vdir.mkdir(parents=True, exist_ok=True)
 
     def encode(path: Path, nframes: int, *, rate: int = FPS, black_prefix: int = 0) -> None:
         container = av.open(str(path), mode="w")
@@ -251,6 +246,8 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
             (vdir / "episode_000001.mp4").unlink()
     else:
         # v3: all episodes share one shard, cut by from/to timestamps
+        vdir = out / "videos" / VIDEO_KEY / "chunk-000"
+        vdir.mkdir(parents=True, exist_ok=True)
         short = 5 if corrupt == "video-mismatch" else 0
         # 30 black frames > head_frames(24): the shard's head window is black
         black = 30 if corrupt == "video-blackout" else 0

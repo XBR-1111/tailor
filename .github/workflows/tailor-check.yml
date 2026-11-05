@@ -4,7 +4,7 @@ name: tailor check (reusable)
 #
 #   jobs:
 #     check-dataset:
-#       uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.8.1
+#       uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.10.0
 #       with:
 #         dataset: lerobot/unitreeh1_fold_clothes
 #

@@ -137,7 +137,7 @@ this repo — one line gates a dataset in your pipeline:
 # your-repo/.github/workflows/dataset-quality.yml
 jobs:
   check-dataset:
-    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.9.0
+    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.10.0
     with:
       dataset: lerobot/unitreeh1_fold_clothes   # HF repo id, local path, or .zip
       fail-on-warn: false
@@ -248,16 +248,19 @@ one-time per process) dominates what's left. Reproduce with
 
 ## Status
 
-Acceptance suite, filter/clean and the provenance ledger shipped (v0.6).
-Roadmap, in priority order:
+v0.10.0: 25 acceptance checks (video depth included), `filter` / `clean` /
+provenance ledger, `diff` and `datasheet`, and the full reference docs under
+`docs/`. Roadmap, in priority order:
 
-**Accept depth (v0.2)** — complete.
+**Accept depth** — complete through video content scanning (opt-in full
+decode: frozen frames, covered lens, blur, mid-file black).
 
-**Pipeline closure (v0.3+) — Cut/Sew/Re-check/Register:**
+**Pipeline closure — Cut/Sew/Re-check/Register:**
 
 - ~~`filter`~~ shipped (see above): explicit / rule-based / check-driven drops, dedupe, on official `delete_episodes`, auto re-check
 - ~~`clean`~~ shipped (see above): stats recompute + timestamp rebuild, dry-run first
 - ~~provenance ledger~~ shipped (see above): append-only, travels with the dataset
+- ~~`diff` / `datasheet`~~ shipped (v0.10.0): version comparison and delivery documents
 - YAML recipes (tracking upstream `recipe.py` direction rather than inventing a schema)
 
 Reference points: lerobot-doctor (diagnostics, now in the official dataset visualizer), Calibra (episode disposition decisions). tailor's lane is the acceptance gate plus the executed pipeline — verdict + exit code as a CI door, then deterministic refinement with provenance, not another report.

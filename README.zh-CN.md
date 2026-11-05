@@ -119,7 +119,7 @@ workflow，你的流水线一行就能对数据集设门禁：
 # your-repo/.github/workflows/dataset-quality.yml
 jobs:
   check-dataset:
-    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.9.0
+    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.10.0
     with:
       dataset: lerobot/unitreeh1_fold_clothes   # HF repo id、本地路径或 .zip
       fail-on-warn: false
@@ -212,15 +212,17 @@ bug——所有 v2.x 数据集的视频文件被误报缺失（合成 fixture �
 
 ## 状态
 
-验收套件、filter/clean 与血缘台账均已交付（v0.6）。路线图按优先级排列：
+v0.10.0：25 条验收检查（含视频纵深）、`filter` / `clean` / 血缘台账、
+`diff` 与 `datasheet`、`docs/` 下的完整参考文档。路线图按优先级排列：
 
-**验收纵深（v0.2）**——已完成。
+**验收纵深**——已完成到视频内容扫描（可选的全解码：冻结帧、镜头遮挡、模糊、中段黑屏）。
 
-**流水线闭环（v0.3+）——Cut/Sew/Re-check/Register：**
+**流水线闭环——Cut/Sew/Re-check/Register：**
 
 - ~~`filter`~~ 已交付（见上）：显式 / 规则式 / 验收驱动剔除、去重，构建于官方 `delete_episodes`，自动 re-check
 - ~~`clean`~~ 已交付（见上）：stats 重算 + 时戳重建，先 dry-run
 - ~~血缘台账~~ 已交付（见上）：append-only，随数据集走
+- ~~`diff` / `datasheet`~~ 已交付（v0.10.0）：版本对比与交付单
 - YAML 配方（跟随上游 `recipe.py` 的方向，不自造 schema）
 
 生态参照：lerobot-doctor（诊断，已进官方 dataset visualizer）、Calibra（episode 处置建议）。tailor 的定位是**验收门禁 + 可执行的流水线**——verdict + 退出码当 CI 门，然后是带血缘的确定性精炼，不做又一份报告。

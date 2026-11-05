@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-11-05
+
+### Fixed
+- `video_content`'s blur detection was rebuilt after a real-data validation
+  round (lerobot/utaustin_mutex@v2.1: 1500 episodes, 1.4 GB, two cameras):
+  - `--max-episodes` now limits the deep scan. It decoded every episode
+    regardless of the sample (a 100-episode run still took 3m15s).
+  - blur no longer compares Laplacian variance against a dataset baseline —
+    variance cannot separate a defocused lens from a legitimately flat
+    close-up (a wrist camera against a plain surface sits at 5-15, the same
+    range as sensor noise). Detection now uses the p99 of |Laplacian| over
+    the whole segment (normal cameras measure 76-128, a defocused lens 8-10,
+    threshold 40) and requires ≥95% of frames edge-free: a working camera
+    sees something sharp at some point, only a broken or dirty lens is
+    edge-free throughout. The previous per-span check produced 404 false
+    positives on one real wrist camera; the rebuilt check produces zero on
+    the full 1500-episode dataset.
+  - tunables: `blur_rel` (removed) is replaced by `blur_p99` (40.0) and
+    `blur_cover` (0.95). Existing profiles that set `blur_rel` must switch.
+- Fixture generator: new `video-blur` corruption (box-blurred frames,
+  p99 8-10) so the rebuilt check has a positive case on both formats.
+
 ## [0.10.0] — 2026-11-05
 
 ### Added

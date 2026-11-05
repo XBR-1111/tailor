@@ -221,7 +221,12 @@ runs in 6 utaustin episodes (worst: 12 identical actions in ep 180), and
 range-edge pegging in 3 pusht v2.0 episodes. The v2.x round surfaced and
 fixed a layout bug where every v2.x dataset misreported all video files
 missing (the synthetic fixture carried the same wrong layout — real data
-caught what fixtures could not).
+caught what fixtures could not). The v0.10.1 round ran the deep video scan
+across all 1500 utaustin episodes and surfaced three false-positive classes
+that fixtures never could: a dataset-wide Laplacian baseline flagged every
+wrist close-up as blur (404 hits), a wrist camera dimming into occlusion read
+as a recorder failure, and `--max-episodes` did not bound the decode scan.
+All three are fixed; the full re-run scans 3000 segments clean.
 
 Also validated on a real 921 MB distributed dataset (`lerobot/unitreeh1_fold_clothes`,
 38 episodes / 19k frames / stereo video) plus deterministic synthetic fixtures

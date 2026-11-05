@@ -136,10 +136,10 @@ per GB — enable with `video_content: {enabled: true}`). Five defect classes:
 | class | signal |
 | --- | --- |
 | frozen | repeated frames: near-identical run (≤0.05% pixels differing by >2 grey levels) lasting `frozen_min_s`, with ≥25% of those bit-exact — a still scene has noise, a stalled camera has none |
-| mid-file black | ≥98% dark pixels for ≥0.5 s, away from the file edges (edges belong to `video_black`) |
+| mid-file black | ≥98% dark pixels for ≥0.5 s, away from the file edges (edges belong to `video_black`), and only when the scene was lit (≥`black_onset`) just before — a wrist camera dimming into occlusion is not a recorder failure |
 | covered lens | flat frame (`std < 8`) that is also darker than 70% of the camera's own lit median — blocked optic, not a dark scene |
 | over-exposure | mean > 245 with std < 10, ≥1 s |
-| blur | Laplacian variance below `blur_rel` × the dataset's own median, sustained ≥1 s, excluding high-motion frames (motion blur is physics, not a defect) |
+| blur | \|Laplacian\| p99 below `blur_p99` for ≥`blur_cover` of the segment — a working camera sees something sharp at some point; only a broken or dirty lens is edge-free throughout. Variance-based per-span detection was abandoned after a real wrist camera produced 404 false positives (a close-up against a plain surface is legitimately flat) |
 
 v3 shards are decoded once; each episode is judged on its metadata timestamp
 segment. Reproduce: `--corrupt video-freeze` (12 repeated frames mid-episode).

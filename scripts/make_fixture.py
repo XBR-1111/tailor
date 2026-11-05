@@ -41,6 +41,7 @@ CORRUPTIONS = (
     "video-fps",  # container encoded at half the declared fps (5 vs 10)
     "video-blackout",  # video starts black (lens cap on / camera never started)
     "video-freeze",  # mid-video repeated frames (deep content check only)
+    "video-blur",  # defocused lens: smooth gradient frames, no sharp edges
     "zero-variance",  # state dim 0 frozen at a constant (dead sensor)
     "schema-drop",  # v2 only: episode 1 parquet loses the observation.state column
     "dropped-frames",  # episode 0 loses frames 8-10: holes in frame_index, rows<length
@@ -220,6 +221,7 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
         rate: int = FPS,
         black_prefix: int = 0,
         freeze_range: tuple[int, int] | None = None,
+        blur: bool = False,
     ) -> None:
         container = av.open(str(path), mode="w")
         stream = container.add_stream("libx264", rate=rate)
@@ -234,6 +236,15 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
                 arr = np.zeros((VIDEO_SIZE, VIDEO_SIZE, 3), dtype=np.uint8)
             else:
                 arr = rng.integers(60, 200, (VIDEO_SIZE, VIDEO_SIZE, 3), dtype=np.uint8)
+                if blur:
+                    # defocus: two wide box blurs leave only smooth gradients
+                    # (Laplacian variance collapses below 2 — no edge anywhere)
+                    f = arr.astype(np.float32)
+                    k = np.ones(15, dtype=np.float32) / 15
+                    for axis in (0, 1):
+                        blur1d = lambda m, k=k: np.convolve(m, k, mode="same")  # noqa: E731
+                        f = np.apply_along_axis(blur1d, axis, f)
+                    arr = np.clip(f, 0, 255).astype(np.uint8)
                 frozen_arr = arr
             frame = av.VideoFrame.from_ndarray(arr, format="rgb24")
             for packet in stream.encode(frame):
@@ -260,6 +271,7 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
                 rate=rate,
                 black_prefix=black,
                 freeze_range=freeze,
+                blur=(corrupt == "video-blur" and ep == 0),
             )
         if corrupt == "missing-video":
             (vdir / "episode_000001.mp4").unlink()
@@ -273,12 +285,15 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
         rate = FPS // 2 if corrupt == "video-fps" else FPS
         # ep1 spans global frames 20-39 in the shared shard; freeze 28-39
         freeze = (28, 40) if corrupt == "video-freeze" else None
+        # v3 has no per-episode cut points in this fixture: blur the whole
+        # shard (any long blurred span must trip the check)
         encode(
             vdir / "file-000.mp4",
             N_EPISODES * EP_LENGTH - short,
             rate=rate,
             black_prefix=black,
             freeze_range=freeze,
+            blur=corrupt == "video-blur",
         )
         if corrupt == "missing-video":
             (vdir / "file-000.mp4").unlink()

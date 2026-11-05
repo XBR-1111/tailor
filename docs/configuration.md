@@ -92,8 +92,10 @@ Only the checks below have tunable parameters. Every other check
 | `video_black` | `dark_share` | `0.9` | share of dark frames that makes an edge "black" | raise to 0.95 if your scenes are dim |
 | `video_content` | `enabled` | `false` | **the deep scan is off by default** (full decode, minutes per GB) | turn on for delivery gates and investigation, not per-commit CI |
 | `video_content` | `frozen_min_s` | `1.0` | shortest repeated-frame run that counts as frozen | lower (0.5) for fast cameras that would never stall that long |
+| `video_content` | `black_onset` | `40.0` | minimum brightness just before a mid-file black span for it to count as a fault; darker lead-in means gradual occlusion (a wrist camera approaching an object), not a recorder failure | lower to flag occlusions too, raise to demand a lit→black cut |
 | `video_content` | `flat_min_s` | `1.0` | shortest covered-lens / over-exposure span reported | raise to ignore brief occlusions |
-| `video_content` | `blur_rel` | `0.25` | blur threshold as a fraction of the dataset's own Laplacian median | 0.15 for stricter sharpness, 0.4 for narrow depth-of-field rigs |
+| `video_content` | `blur_p99` | `40.0` | a frame counts as sharpness-free when its \|Laplacian\| p99 falls below this (64-px grayscale scale: normal cameras measure 76-128, a defocused lens 8-10) | raise to flag softer footage, lower to tolerate it |
+| `video_content` | `blur_cover` | `0.95` | share of a segment's frames that must be sharpness-free to report defocus | lower to catch partial defocus at the cost of wrist-camera false positives |
 | `video_sync` | `tolerance` | `0.05` | cross-camera from/to timestamp drift (seconds) per episode | raise to 0.1 for stereo rigs without hardware sync |
 
 ### Training

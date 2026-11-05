@@ -796,6 +796,7 @@ def _decode_content_measures(path: Path, gray_width: int = 64) -> dict | None:
         "exact": [],
         "lap_t": [],
         "lap": [],
+        "lap99": [],
     }
     try:
         container = av.open(str(path))
@@ -838,8 +839,14 @@ def _decode_content_measures(path: Path, gray_width: int = 64) -> dict | None:
             lap = (
                 np.roll(f, 1, 0) + np.roll(f, -1, 0) + np.roll(f, 1, 1) + np.roll(f, -1, 1) - 4 * f
             )
+            core = lap[1:-1, 1:-1]
             out["lap_t"].append(t)
-            out["lap"].append(float(lap[1:-1, 1:-1].var()))
+            out["lap"].append(float(core.var()))
+            # p99 of |Laplacian|: an in-focus frame keeps sharp edges even when
+            # the scene is mostly flat (close-up against a plain surface), so
+            # p99 stays ≥~75; a defocused lens has NO edge anywhere and p99
+            # collapses to the sensor-noise floor (~10 on our 64-px grayscale)
+            out["lap99"].append(float(np.percentile(np.abs(core), 99)))
         prev16, prev_id = g16, g
     container.close()
     return out
@@ -861,7 +868,7 @@ def _true_runs(t: "np.ndarray", flags: "np.ndarray", min_len: float) -> list[tup
     return spans
 
 
-def _content_problems(measures: dict, base_lap: float, cfg: dict) -> list[str]:
+def _content_problems(measures: dict, cfg: dict) -> list[str]:
     """Content-level problems in one decoded segment (seconds + reason)."""
     t = np.asarray(measures["t"], dtype=float)
     if len(t) < 2:
@@ -880,10 +887,20 @@ def _content_problems(measures: dict, base_lap: float, cfg: dict) -> list[str]:
         m = (t >= a) & (t < b)
         if m.any() and float(exact[m].mean()) >= 0.25:
             problems.append(f"frozen {b - a:.1f}s from {a:.1f}s (repeated frames)")
-    # black spans away from the file edges (edges are video_black's job)
+    # black spans away from the file edges (edges are video_black's job).
+    # A real recorder failure cuts from a normally lit scene to black; a wrist
+    # camera dimming into black has already gone dark for a second before
+    # (an object moving right up against the lens). Only report when the
+    # scene was still lit just before the black onset (real ep 247 case:
+    # mean 15-28 for a second before going dark — occlusion, not a fault).
+    onset = float(cfg.get("black_onset", 40.0))
     for a, b in _true_runs(t, dark, 0.5):
-        if a > 0.5 and b < dur - 0.5:
-            problems.append(f"black {b - a:.1f}s from {a:.1f}s (mid-file)")
+        if not (a > 0.5 and b < dur - 0.5):
+            continue
+        pre = mean[(t >= a - 0.5) & (t < a)]
+        if len(pre) and float(np.median(pre)) < onset:
+            continue
+        problems.append(f"black {b - a:.1f}s from {a:.1f}s (mid-file)")
     # flat frame while lit: lens covered / featureless scene
     lit = mean[~dark]
     norm = float(np.median(lit)) if len(lit) else 0.0
@@ -893,27 +910,36 @@ def _content_problems(measures: dict, base_lap: float, cfg: dict) -> list[str]:
     over = (mean > 245.0) & (std < 10.0)
     for a, b in _true_runs(t, over, 1.0):
         problems.append(f"overexposed {b - a:.1f}s from {a:.1f}s (washed out)")
-    # persistent blur: Laplacian variance far below the dataset baseline,
-    # excluding high-motion frames (motion blur is physics, not a defect)
-    lap_t = np.asarray(measures["lap_t"], dtype=float)
-    lap = np.asarray(measures["lap"], dtype=float)
-    if base_lap and len(lap):
-        soft = (
-            np.interp(t, lap_t, (lap < float(cfg.get("blur_rel", 0.25)) * base_lap).astype(float))
-            > 0.5
-        )
-        mad = np.nan_to_num(np.asarray(measures["mad"], dtype=float), nan=1.0)
-        calm = np.interp(t, t, mad) < 0.01
-        for a, b in _true_runs(t, soft & calm, 1.0):
-            problems.append(f"blur {b - a:.1f}s from {a:.1f}s (out of focus / dirty lens)")
+    # blur: p99 of |Laplacian| collapses only when no edge is sharp anywhere.
+    # Variance cannot separate defocus from a legitimately flat close-up (a
+    # wrist camera against a plain surface sits at 5-15, the same range as
+    # sensor noise), but those frames still carry sharp object contours —
+    # measured p99 was 76-128 for normal cameras on a real 1.4 GB dataset vs
+    # 8-10 for a defocused lens. The 40 floor sits 4-8x from both sides.
+    # Judged over the WHOLE segment: a working camera sees something sharp at
+    # some point (reaching in, turning); only a broken/dirty lens is flat for
+    # the entire recording. Per-span detection drowned in false positives on
+    # a real wrist camera (33 hits per 100 episodes, all legit close-ups).
+    lap99 = np.asarray(measures.get("lap99") or [], dtype=float)
+    floor = float(cfg.get("blur_p99", 40.0))
+    cover_frac = float(cfg.get("blur_cover", 0.95))
+    if len(lap99):
+        soft_frac = float((lap99 < floor).mean())
+        if soft_frac >= cover_frac:
+            problems.append(f"no sharp edges in {soft_frac:.0%} of frames (defocus / dirty lens)")
     return problems
 
 
 def _video_segments(
-    snap: DatasetSnapshot, keys: list[str]
+    snap: DatasetSnapshot, keys: list[str], ep_indices: set[int] | None = None
 ) -> list[tuple[str, str, Path, float | None, float | None]]:
     """(key, label, path, start_s, end_s) — v2 one file per episode, v3
-    episodes cut from shared shards by their metadata timestamps."""
+    episodes cut from shared shards by their metadata timestamps.
+
+    ep_indices limits scanning to the sampled episodes (--max-episodes):
+    decode-heavy work must follow the sample, unlike metadata checks which
+    read the full episode list for free.
+    """
     version = (snap.info or {}).get("codebase_version")
     out: list[tuple[str, str, Path, float | None, float | None]] = []
     if snap.episodes is None:
@@ -921,6 +947,8 @@ def _video_segments(
     for key in keys:
         if version == "v3.0":
             for ep in snap.episodes:
+                if ep_indices is not None and ep.get("episode_index") not in ep_indices:
+                    continue
                 c = ep.get(f"videos/{key}/chunk_index")
                 f = ep.get(f"videos/{key}/file_index")
                 t0, t1 = (
@@ -943,6 +971,8 @@ def _video_segments(
                     )
         else:
             for ep in snap.episodes:
+                if ep_indices is not None and ep.get("episode_index") not in ep_indices:
+                    continue
                 idx = ep.get("episode_index", -1)
                 path = (
                     snap.root
@@ -976,13 +1006,14 @@ def check_video_content(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     except ImportError:
         return _skip("video_content", "PyAV not installed (pip install av)")
 
-    segs = _video_segments(snap, keys)
+    # decode-heavy work follows the --max-episodes sample; the absolute
+    # blur floor makes per-camera baselines unnecessary (see _content_problems)
+    ep_indices = set(snap.frames) if snap.frames else None
+    segs = _video_segments(snap, keys, ep_indices)
     decoded: dict[Path, dict | None] = {}
     for _key, _label, path, _a, _b in segs:
         if path not in decoded:
             decoded[path] = _decode_content_measures(path)
-    laps = [v for m in decoded.values() if m for v in m["lap"]]
-    base_lap = float(np.median(laps)) if laps else 0.0
     problems: list[str] = []
     for key, label, path, a, b in segs:
         m = decoded.get(path)
@@ -1000,11 +1031,12 @@ def check_video_content(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
             seg["lap"] = np.asarray(m["lap"])[lmask].tolist()
             # per-frame series slice on the frame mask; lap is sampled every
             # BLUR_EVERY frames and gets its own mask above
+            seg["lap99"] = np.asarray(m["lap99"])[lmask].tolist()
             for k2 in ("mean", "std", "dark", "mad", "ident", "exact"):
                 seg[k2] = np.asarray(m[k2])[mask].tolist()
         else:
             seg = m
-        for p in _content_problems(seg, base_lap, cfg):
+        for p in _content_problems(seg, cfg):
             problems.append(f"{key} {label}: {p}")
     if problems:
         return _fail("video_content", f"{len(problems)} content problem(s)", problems=problems[:10])

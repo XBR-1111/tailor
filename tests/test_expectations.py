@@ -253,15 +253,17 @@ def test_duration_gap_ratio_math() -> None:
     assert _duration_gap_ratio(100, 10.0, None) is None
 
 
-def test_video_freeze_caught_by_deep_content_check(tmp_path: Path) -> None:
-    """video_content is OFF by default (full decode) and must be opted in."""
+@pytest.mark.parametrize("corrupt", ["video-freeze", "video-blur"])
+def test_content_defects_caught_by_deep_content_check(tmp_path: Path, corrupt: str) -> None:
+    """video_content is OFF by default (full decode) and must be opted in.
+    Covers repeated frames (stalled camera) and whole-segment defocus."""
     for fmt in ("v2.1", "v3.0"):
-        ds = make_fixture(tmp_path / fmt, "video-freeze", fmt=fmt)
+        ds = make_fixture(tmp_path / fmt, corrupt, fmt=fmt)
         snap = load_snapshot(ds)
         off = {r.name: r.status for r in run_all(snap)}
         assert off["video_content"] == Status.SKIP
         on = {r.name: r.status for r in run_all(snap, {"video_content": {"enabled": True}})}
-        assert on["video_content"] == Status.FAIL, fmt
+        assert on["video_content"] == Status.FAIL, f"{corrupt} {fmt}"
 
 
 def test_video_content_clean_passes_with_profile(tmp_path: Path) -> None:
@@ -270,3 +272,39 @@ def test_video_content_clean_passes_with_profile(tmp_path: Path) -> None:
     snap = load_snapshot(ds)
     on = {r.name: r.status for r in run_all(snap, {"video_content": {"enabled": True}})}
     assert on["video_content"] == Status.PASS
+
+
+def test_mid_black_requires_lit_lead_in() -> None:
+    """A mid-file black span is a fault only when the scene was still lit just
+    before it: a wrist camera dimming into occlusion (real ep 247: mean 15-28
+    a second before black) must not be flagged, a lit→black cut must be."""
+    import numpy as np
+
+    from tailor.expectations import _content_problems
+
+    n = 60
+    t = np.arange(n) / 10.0  # 6 s at 10 fps
+    mean = np.full(n, 100.0)
+    mean[30:40] = 3.0  # black span 3.0-3.9 s, lead-in lit at 100
+    dark = (mean < 24).astype(float)
+    base = {
+        "t": t.tolist(),
+        "mean": mean.tolist(),
+        "std": (np.where(dark > 0, 1.0, 30.0)).tolist(),
+        "dark": dark.tolist(),
+        "mad": [0.05] * n,
+        "ident": [False] * n,
+        "exact": [False] * n,
+        "lap_t": t[::5].tolist(),
+        "lap": [1000.0] * len(t[::5]),
+        "lap99": [200.0] * len(t[::5]),
+    }
+    lit_cut = _content_problems(dict(base), {"black_onset": 40.0})
+    assert any(p.startswith("black") for p in lit_cut), lit_cut
+
+    dim = dict(base)
+    mean2 = np.array(base["mean"])
+    mean2[20:30] = 20.0  # one second of dimming before the black span
+    dim["mean"] = mean2.tolist()
+    occluded = _content_problems(dim, {"black_onset": 40.0})
+    assert not any(p.startswith("black") for p in occluded), occluded

@@ -107,7 +107,7 @@ def check_episodes_metadata(snap: DatasetSnapshot, cfg: dict | None = None) -> C
     return _ok("episodes_metadata", f"{len(snap.episodes)} episodes")
 
 
-def check_episode_files_exist(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+def check_episode_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
     if not (snap.root / "data").is_dir():
         return _skip("episode_files", "data/ not on disk (meta-only run? use --full)")
@@ -1270,7 +1270,7 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_codebase_version,
         check_fps,
         check_episodes_metadata,
-        check_episode_files_exist,
+        check_episode_files,
         check_total_frames,
         check_episode_lengths,
         check_task_indices,

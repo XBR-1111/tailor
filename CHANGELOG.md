@@ -7,6 +7,22 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Reference docs under `docs/`: `configuration.md` (every tunable with
+  defaults, merge semantics, validation rules, starter recipes),
+  `checks.md` (per-check logic, verdict capability, corruption repro),
+  `cli.md` (every command, flag, exit code, JSON payload).
+- `tests/test_docs.py` pins the docs to the code: tunable tables must equal
+  DEFAULTS, every check must appear with its exact registry name, cited
+  corruptions must exist, CLI flags must match `cli.py` in both directions.
+- `tailor diff` and `tailor datasheet` documented in both READMEs.
+
+### Fixed
+- The `episode_files` check was registered as `episode_files_exist`, so a
+  profile could not address it (`unknown check` error) while every doc and
+  test called it `episode_files`. Renamed the checker to match its output
+  name; `tests/test_docs.py` now asserts registry keys equal reported names
+  for all 25 checks.
+
 - `video_content` check (OFF by default): full-decode content scan — frozen
   frames (near-identical run with ≥25% bit-exact repeats, distinguishing a
   stalled camera from a still scene), mid-file black spans, covered lens,

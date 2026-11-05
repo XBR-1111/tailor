@@ -31,7 +31,7 @@ pip install lerobot-tailor
 tailor check /path/to/lerobot/dataset
 tailor check dataset.zip                # zip archive (wrapper dirs peeled)
 tailor check lerobot/unitreeh1_fold_clothes   # HF repo id: meta pre-check, no full download
-tailor check lerobot/... --full               # download everything, all 22 checks
+tailor check lerobot/... --full               # download everything, all 25 checks
 ```
 
 ```
@@ -116,6 +116,16 @@ tailor provenance /data/ds_filtered
 `check` never writes — acceptance is read-only. Fingerprints are structural
 (episode metadata + data file sizes), for identity not cryptographic proof.
 
+## Diff and datasheet
+
+Two commands for the pipeline around the gate. `tailor diff OLD NEW` compares
+two dataset versions at meta level — structure, feature-schema drift, episode
+set/length changes, video re-encodes (file-size signal), stats drift — with
+exit codes **0** identical / **1** differs, so a re-delivery can be gated on
+"did anything change". `tailor datasheet PATH` renders a delivery document:
+scale and footage hours, feature table, acceptance verdicts, lineage — one
+run of the check suite, ready for a dataset card or a handoff ticket.
+
 ## Use as a CI gate
 
 `tailor check` is designed to sit in someone else's CI: exit codes are the
@@ -167,7 +177,11 @@ Unknown check names or keys in a profile fail fast with a clear error — a
 typo in your requirements must not silently keep a default you meant to
 change.
 
-## The 23 acceptance checks
+Full reference: [every tunable with defaults and guidance](docs/configuration.md)
+· [every check's logic and corruption repro](docs/checks.md)
+· [every command and flag](docs/cli.md).
+
+## The 25 acceptance checks
 
 | check | catches |
 | --- | --- |

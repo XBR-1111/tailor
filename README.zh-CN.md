@@ -31,7 +31,7 @@ pip install lerobot-tailor
 tailor check /path/to/lerobot/dataset
 tailor check dataset.zip                # zip 归档（自动剥掉包裹层目录）
 tailor check lerobot/unitreeh1_fold_clothes   # HF repo id：meta 预检，不下载全量
-tailor check lerobot/... --full               # 下载全部，跑满 23 条检查
+tailor check lerobot/... --full               # 下载全部，跑满 25 条检查
 ```
 
 ```
@@ -157,7 +157,11 @@ tailor check /data/dataset --profile my_requirements.yaml
 也不会给 `--from-check` 贡献任何 episode）。profile 里出现未知的检查名或
 配置键会立刻报错——需求文件里的 typo 不能静默地保留一个你想改掉的默认值。
 
-## 23 条验收检查
+完整参考：[每个可调参数与默认值](docs/configuration.md)
+· [每条检查的判定逻辑与坏数据复现](docs/checks.md)
+· [全部命令与参数](docs/cli.md)。
+
+## 25 条验收检查
 
 | 检查项 | 抓什么问题 |
 | --- | --- |

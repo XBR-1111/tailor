@@ -50,19 +50,30 @@ def check(
     fail_on_warn: bool = typer.Option(
         False, "--fail-on-warn", help="Exit 1 on WARN findings too (strict CI gate)."
     ),
+    fail_on_skip: bool = typer.Option(
+        False,
+        "--fail-on-skip",
+        help=(
+            "Exit 3 when any check was SKIPped (e.g. remote meta-only runs leave "
+            "file-dependent checks unjudged — a green exit there is not a full pass)."
+        ),
+    ),
     max_episodes: int | None = typer.Option(
         None, "--max-episodes", help="Only inspect N episodes (big datasets)."
     ),
     sample: str = typer.Option(
-        "first",
+        "last",
         "--sample",
-        help="With --max-episodes: keep 'first' (default) or 'last' N episodes. "
-        "Tail-end episodes are a common corruption site.",
+        help=(
+            "With --max-episodes: keep 'first' or 'last' (default) N episodes. "
+            "Tail-end episodes are a common corruption site, so 'last' is the default."
+        ),
     ),
 ) -> None:
     """Run acceptance checks on a dataset.
 
-    Exit codes: 0 accepted (no FAIL) · 1 rejected (>=1 FAIL) · 2 unreadable dataset.
+    Exit codes: 0 accepted (no FAIL) · 1 rejected (>=1 FAIL) · 2 unreadable dataset
+    · 3 --fail-on-skip with SKIPped checks (verdict incomplete).
     """
     from tailor.profile import ProfileError, load_profile
     from tailor.source import resolve_input
@@ -107,7 +118,13 @@ def check(
         console.print(f"[dim]markdown report: {markdown}[/dim]")
     fails = sum(r.status == Status.FAIL for r in results)
     warns = sum(r.status == Status.WARN for r in results)
-    exit_code = 1 if fails or (fail_on_warn and warns) else 0
+    skips = sum(r.status == Status.SKIP for r in results)
+    if fails or (fail_on_warn and warns):
+        exit_code = 1
+    elif fail_on_skip and skips:
+        exit_code = 3
+    else:
+        exit_code = 0
     raise typer.Exit(code=exit_code)
 
 

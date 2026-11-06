@@ -11,6 +11,7 @@ label"): format compliance, metadata-vs-data consistency, integrity.
 import json
 import math
 from collections.abc import Callable
+from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
@@ -117,12 +118,14 @@ def check_episode_files(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     if version == "v3.0":
         # v3 stores episodes back-to-back in chunk/file shards; episode meta
         # carries the shard pointer, so existence is checked per shard.
+        referenced: set[tuple[int, int]] = set()
         missing_shards = set()
         for ep in snap.episodes:
             c, f = ep.get("data/chunk_index"), ep.get("data/file_index")
             if not isinstance(c, int) or not isinstance(f, int):
                 missing_shards.add("unresolved shard pointer")
                 continue
+            referenced.add((c, f))
             shard = snap.root / "data" / f"chunk-{c:03d}" / f"file-{f:03d}.parquet"
             if not shard.is_file():
                 missing_shards.add(str(shard.relative_to(snap.root)))
@@ -131,6 +134,28 @@ def check_episode_files(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
                 "episode_files",
                 f"{len(missing_shards)} data shard(s) missing",
                 missing=sorted(missing_shards)[:20],
+            )
+        # pointer self-consistency, the other half of existence: a shard on
+        # disk that no episode references is data nobody will ever read. The
+        # real unitreeh1 case (README) — all cam_left pointers aimed at
+        # file-000 while 500 frames sat in an unreferenced file-001 — sails
+        # through existence alone when the wrongly-pointed file happens to be
+        # big enough; the orphan scan catches it in one move, metadata-only.
+        orphans: list[str] = []
+        for shard in sorted((snap.root / "data").glob("chunk-*/file-*.parquet")):
+            try:
+                c = int(shard.parent.name.removeprefix("chunk-"))
+                f = int(shard.stem.removeprefix("file-"))
+            except ValueError:
+                orphans.append(str(shard.relative_to(snap.root)) + " (unparsable name)")
+                continue
+            if (c, f) not in referenced:
+                orphans.append(str(shard.relative_to(snap.root)))
+        if orphans:
+            return _fail(
+                "episode_files",
+                f"{len(orphans)} data shard(s) on disk not referenced by any episode",
+                orphans=orphans[:20],
             )
         return _ok("episode_files")
     missing = [
@@ -265,13 +290,31 @@ def check_state_action_dims(snap: DatasetSnapshot, cfg: dict | None = None) -> C
     return _ok("state_action_dims")
 
 
+def _numeric_feature_columns(df: Any) -> list[str]:
+    """observation.*/action columns with a numeric dtype — a NaN is an error
+    in any of them, not just state/action (joint positions, extra scalar
+    sensors). String columns (language instructions) and non-feature columns
+    (frame_index, timestamp) are excluded.
+    """
+    out = []
+    for col in df.columns:
+        if not (col.startswith("observation.") or col.startswith("action")):
+            continue
+        dt = df[col].dtype
+        if np.issubdtype(dt, np.floating) or np.issubdtype(dt, np.integer):
+            out.append(col)  # plain scalar column
+        elif dt.kind == "O" and len(df) and isinstance(df[col].iloc[0], np.ndarray):
+            out.append(col)  # fixed_size_list columns (state/action) arrive as object
+    return out
+
+
 def check_nan_inf(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
     if not snap.frames:
         return _skip("nan_inf", "no readable frames")
     bad = []
     for idx in sorted(snap.frames):
-        for col in ("observation.state", "action"):
+        for col in _numeric_feature_columns(snap.frames[idx]):
             arr = snap.col_array(idx, col)
             if arr is None:
                 continue
@@ -281,7 +324,7 @@ def check_nan_inf(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult
     if bad:
         return _fail(
             "nan_inf",
-            "non-finite values found in state/action",
+            "non-finite values found in numeric feature columns",
             bad=bad[:10],
         )
     return _ok("nan_inf")
@@ -363,6 +406,8 @@ def check_stats_recompute(snap: DatasetSnapshot, cfg: dict | None = None) -> Che
         for stat_name, actual in (
             ("mean", running.mean),
             ("std", running.std),
+            ("min", running.min),
+            ("max", running.max),
         ):
             decl = np.asarray(stats[stat_name], dtype=float)
             scale = np.maximum(np.abs(decl), 1e-9)
@@ -558,6 +603,66 @@ def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
         return _fail(
             "video_files", f"{len(missing)} video file(s) missing", missing=sorted(missing)[:10]
         )
+    if version == "v3.0":
+        # the other half of pointer self-consistency, video side: orphan
+        # shards (on disk, never referenced) and timestamp overlap on the
+        # same shard. Overlap means one video span claims to belong to two
+        # episodes — never legal. A gap inside a shard is only a warning:
+        # deletions legally leave unreferenced spans inside a shared file.
+        referenced: dict[str, set[tuple[int, int]]] = {key: set() for key in keys}
+        spans: dict[tuple[str, int, int], list[tuple[float, float]]] = {}
+        for ep in snap.episodes:
+            for key in keys:
+                c = ep.get(f"videos/{key}/chunk_index")
+                f = ep.get(f"videos/{key}/file_index")
+                if not isinstance(c, int) or not isinstance(f, int):
+                    continue
+                referenced[key].add((c, f))
+                a = ep.get(f"videos/{key}/from_timestamp")
+                b = ep.get(f"videos/{key}/to_timestamp")
+                if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+                    spans.setdefault((key, c, f), []).append((float(a), float(b)))
+        problems: list[str] = []
+        for key in keys:
+            vdir = snap.root / "videos" / key
+            if not vdir.is_dir():
+                continue
+            for shard in sorted(vdir.glob("chunk-*/file-*.mp4")):
+                try:
+                    c = int(shard.parent.name.removeprefix("chunk-"))
+                    f = int(shard.stem.removeprefix("file-"))
+                except ValueError:
+                    problems.append(f"{key}: {shard.relative_to(snap.root)} (unparsable name)")
+                    continue
+                if (c, f) not in referenced[key]:
+                    problems.append(f"{key}: orphan shard {shard.relative_to(snap.root)}")
+        overlaps: list[str] = []
+        gaps: list[str] = []
+        for (key, c, f), iv in spans.items():
+            iv.sort()
+            for (a1, b1), (a2, b2) in pairwise(iv):
+                if a2 < b1 - 1e-6:
+                    overlaps.append(
+                        f"{key} chunk-{c:03d}/file-{f:03d}: "
+                        f"[{a1:.1f},{b1:.1f}) overlaps [{a2:.1f},{b2:.1f})"
+                    )
+                elif a2 > b1 + 1e-6:
+                    gaps.append(
+                        f"{key} chunk-{c:03d}/file-{f:03d}: gap {a2 - b1:.1f}s at {b1:.1f}s"
+                    )
+        if problems or overlaps:
+            return _fail(
+                "video_files",
+                f"{len(problems) + len(overlaps)} video shard pointer problem(s)",
+                problems=(problems + overlaps)[:20],
+                gaps=gaps[:20],
+            )
+        if gaps:
+            return _warn(
+                "video_files",
+                f"{len(gaps)} unreferenced span(s) inside shared shards (deleted episodes?)",
+                gaps=gaps[:20],
+            )
     return _ok("video_files", f"{len(keys)} stream(s)")
 
 

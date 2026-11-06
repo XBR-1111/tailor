@@ -48,6 +48,7 @@ CORRUPTIONS = (
     "duplicate-episode",  # episode 2 copies episode 0's state/action trajectories
     "portability-junk",  # stray debug.log in data/ + top-level notes.txt
     "video-desync",  # v3 only: second camera's to_timestamp drifts 0.3s in ep 1
+    "orphan-shard",  # v3 only: unreferenced file-001 copies (data + video) on disk
 )
 
 
@@ -196,6 +197,13 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
 
     if corrupt == "missing-file":
         (out / "data" / "chunk-000" / "file-000.parquet").unlink()
+    if corrupt == "orphan-shard":
+        # pointer-error aftermath: every episode points at file-000 while
+        # real-looking shards sit in file-001 that no metadata references
+        shutil.copy(
+            out / "data" / "chunk-000" / "file-000.parquet",
+            out / "data" / "chunk-000" / "file-001.parquet",
+        )
     _write_videos(out, "v3.0", corrupt)
     _write_stats(out, corrupt)
     if corrupt == "portability-junk":
@@ -287,6 +295,8 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
         freeze = (28, 40) if corrupt == "video-freeze" else None
         # v3 has no per-episode cut points in this fixture: blur the whole
         # shard (any long blurred span must trip the check)
+        if corrupt == "orphan-shard":
+            encode(vdir / "file-001.mp4", EP_LENGTH)  # written after file-000 below
         encode(
             vdir / "file-000.mp4",
             N_EPISODES * EP_LENGTH - short,

@@ -22,7 +22,7 @@ Every command exits **0** on success, **2** when the input is unreadable.
 
 ```bash
 tailor check PATH [--profile FILE] [--json] [--markdown FILE]
-                  [--fail-on-warn] [--max-episodes N [--sample first|last]]
+                  [--fail-on-warn] [--fail-on-skip] [--max-episodes N [--sample first|last]]
                   [--full]
 ```
 
@@ -32,12 +32,13 @@ tailor check PATH [--profile FILE] [--json] [--markdown FILE]
 | `--json` | emit machine-readable JSON on stdout |
 | `--markdown FILE` | write a PR/dataset-card friendly report |
 | `--fail-on-warn` | treat WARN as failure for the exit code (strict CI gate) |
+| `--fail-on-skip` | exit **3** when any check was SKIPped — a remote meta-only run leaves file-dependent checks unjudged, and a green exit there is not a full pass |
 | `--max-episodes N` | inspect only N episodes of a large dataset |
-| `--sample first\|last` | which N: default `first`; `last` catches tail-end corruption that head sampling never sees |
+| `--sample first\|last` | which N: default `last` (since 0.11.0); tail-end episodes are a common corruption site, so the default looks there |
 | `--full` | remote only: download everything, run all checks |
 
 Exit codes: **0** accepted · **1** rejected (any FAIL, or any WARN with
-`--fail-on-warn`) · **2** unreadable input.
+`--fail-on-warn`/`--fail-on-skip`) · **2** unreadable input · **3** SKIPped checks with `--fail-on-skip`.
 
 `--json` payload:
 

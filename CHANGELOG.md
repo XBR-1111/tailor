@@ -6,6 +6,41 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-11-05
+
+External-review round (issue-style triage by three criteria: unnoticed by the
+author, hit by real data, cheap to fix). All six findings were verified
+against the code first; one was partially false (schema_consistency already
+covers all columns) and five shipped:
+
+### Added
+- v3 pointer self-consistency, both directions (`episode_files`, `video_files`):
+  shards on disk that no episode references FAIL (data and video sides), and
+  episode timestamp spans on one shard must not overlap. Gaps inside a shared
+  shard WARN (episode deletion legally leaves them). Metadata-only, no decode.
+  This closes the blind spot behind the README's unitreeh1 case: when the
+  wrongly-pointed file happens to hold enough frames, existence checks and
+  frame-count accounting both pass while real data sits unreferenced.
+  Reproduce with the new `--corrupt orphan-shard` fixture.
+- `--fail-on-skip`: exit 3 when any check was SKIPped. A remote meta-only run
+  leaves file-dependent checks unjudged; a green exit there is not a full
+  pass, and CI gates can now say so explicitly.
+
+### Changed
+- `--sample` default flips from `first` to `last`. The old default contradicted
+  our own README ("tail-end episodes are a common corruption site that a
+  first-N sample never sees"). Explicit `--sample first` keeps old behavior.
+- `nan_inf` now scans every numeric `observation.*` / `action` column, not just
+  `state`/`action` — extra scalar sensors and joint positions carry NaNs into
+  training all the same. `zero_variance` / `stats_recompute` / `action_quality`
+  remain state/action-scoped (documented in docs/checks.md).
+- `stats_recompute` also recomputes `min`/`max` — they feed `action_quality`'s
+  boundary test, and a corrupted range silently corrupted that verdict too.
+
+### Fixed
+- docs: `video_sync`'s v2.x SKIP now names its v2 substitutes
+  (`video_streams` frame accounting, deep `video_content`).
+
 ## [0.10.1] — 2026-11-05
 
 ### Fixed

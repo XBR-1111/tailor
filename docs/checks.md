@@ -57,9 +57,15 @@ exist. Gate for anyone who trains and evaluates from one artifact.
 
 ## Data columns (parquet)
 
-**`episode_files`** — every data shard the metadata points at exists on disk.
-v2: one parquet per episode; v3: shared shards via `data/chunk_index` +
-`data/file_index`. Reproduce: `--corrupt missing-file`.
+**`episode_files`** — every data shard the metadata points at exists on disk,
+and (v3) pointer self-consistency holds the other way too: a shard on disk
+that no episode references is data nobody will ever read. The orphan scan is
+metadata-only and catches the class of pointer errors that existence checks
+and frame counts both miss — when the wrongly-pointed file is big enough, the
+unitreeh1-style defect (real frames sitting in an unreferenced `file-001`)
+sails through everything else. v2: one parquet per episode; v3: shared shards
+via `data/chunk_index` + `data/file_index`. Reproduce: `--corrupt missing-file`,
+`--corrupt orphan-shard`.
 
 **`state_action_dims`** — vector dims of `observation.state` / `action`
 match the declared feature shapes.
@@ -107,7 +113,11 @@ Video checks probe containers through PyAV metadata first and decode pixels
 only where a metadata signal can't answer the question.
 
 **`video_files`** — every declared video stream exists on disk. v2: one file
-per episode; v3: shard pointers (`videos/<key>/chunk_index` + `file_index`).
+per episode; v3: shard pointers (`videos/<key>/chunk_index` + `file_index`),
+plus the reverse direction: orphan video shards nobody references FAIL, and
+episode timestamp spans on one shard must not overlap (one video span cannot
+belong to two episodes). Gaps inside a shared shard only WARN — deleting
+episodes legally leaves unreferenced spans. Reproduce: `--corrupt orphan-shard`.
 Reproduce: `--corrupt missing-video`.
 
 **`video_streams`** — five container-level sub-checks, one row each finding:
@@ -145,8 +155,10 @@ v3 shards are decoded once; each episode is judged on its metadata timestamp
 segment. Reproduce: `--corrupt video-freeze` (12 repeated frames mid-episode).
 
 **`video_sync`** — v3 metadata: per-camera `from_timestamp`/`to_timestamp`
-for one episode agree within `tolerance` seconds. Catches stereo rigs without
-hardware sync before they reach training. Reproduce: `--corrupt video-desync`
+for one episode agree within `tolerance` seconds. v2.x has no per-camera
+timestamps in metadata, so this check SKIPs there — the v2 substitutes are
+`video_streams` frame-count accounting and the deep `video_content` scan.
+Catches stereo rigs without hardware sync before they reach training. Reproduce: `--corrupt video-desync`
 (second camera's `to_timestamp` drifts 0.3 s in episode 1; the video file
 itself stays well-formed so only this check fires).
 

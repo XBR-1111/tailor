@@ -60,9 +60,11 @@ FAIL. Downloads cache under `~/.cache/tailor-hf/`.
 Exit codes make it a CI gate: **0** accepted · **1** rejected · **2** unreadable
 (`--fail-on-warn` makes WARN exit 1 too). `--json` emits machine-readable output,
 `--markdown report.md` writes a PR/dataset-card friendly report, `--max-episodes N`
-samples N episodes of huge datasets — a convenience sample, so pair it with
-`--sample last`: tail-end episodes are a common corruption site that a
-first-N sample never sees.
+samples N episodes of huge datasets — a convenience sample, defaulting to the
+tail (`--sample last`): tail-end episodes are a common corruption site that a
+first-N sample never sees. `--fail-on-skip` exits 3 when any check was SKIPped
+(remote meta-only runs leave file-dependent checks unjudged — green is not a
+full pass there).
 
 ## Filter — the Cut stage
 

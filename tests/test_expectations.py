@@ -308,3 +308,70 @@ def test_mid_black_requires_lit_lead_in() -> None:
     dim["mean"] = mean2.tolist()
     occluded = _content_problems(dim, {"black_onset": 40.0})
     assert not any(p.startswith("black") for p in occluded), occluded
+
+
+def test_orphan_shards_fail_both_pointer_checks(tmp_path: Path) -> None:
+    """Unreferenced data/video shards (the unitreeh1 aftermath: real frames
+    sitting in a file no episode points at) must fail episode_files and
+    video_files even though every declared file exists with enough frames."""
+    from tailor.expectations import check_episode_files, check_video_files
+
+    ds = make_fixture(tmp_path / "v3", "orphan-shard", fmt="v3.0")
+    snap = load_snapshot(ds)
+    ef = check_episode_files(snap)
+    vf = check_video_files(snap)
+    assert ef.status == Status.FAIL, ef.message
+    assert "not referenced" in ef.message
+    assert vf.status == Status.FAIL, vf.message
+    assert any("orphan" in str(p) for p in vf.details.get("problems", []))
+
+
+def test_clean_v3_has_no_orphans_or_overlaps(tmp_path: Path) -> None:
+    """The clean v3 fixture must stay green under the new pointer checks."""
+    from tailor.expectations import check_episode_files, check_video_files
+
+    ds = make_fixture(tmp_path / "v3", fmt="v3.0")
+    snap = load_snapshot(ds)
+    assert check_episode_files(snap).status == Status.PASS
+    assert check_video_files(snap).status == Status.PASS
+
+
+def test_overlapping_video_spans_fail(tmp_path: Path) -> None:
+    """Two episodes claiming the same seconds of one shard is never legal."""
+    import pandas as pd
+
+    from tailor.expectations import check_video_files
+
+    ds = make_fixture(tmp_path / "v3", fmt="v3.0")
+    eps_path = ds / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    df = pd.read_parquet(eps_path)
+    fcol = "videos/observation.images.top/from_timestamp"
+    tcol = "videos/observation.images.top/to_timestamp"
+    # episode 1 starts inside episode 0's span on the same shard
+    df.loc[1, fcol] = 1.0
+    df.loc[1, tcol] = float(df.loc[0, tcol]) + 1.0
+    df.to_parquet(eps_path)
+    snap = load_snapshot(ds)
+    r = check_video_files(snap)
+    assert r.status == Status.FAIL, r.message
+    assert any("overlaps" in str(p) for p in r.details.get("problems", []))
+
+
+def test_nan_inf_covers_extra_numeric_columns(tmp_path: Path) -> None:
+    """A NaN in any numeric observation.*/action column (extra scalar
+    sensors, joint positions) is a failure, not just state/action."""
+    import numpy as np
+    import pandas as pd
+
+    from tailor.expectations import check_nan_inf
+
+    snap = load_snapshot(make_fixture(tmp_path))
+    idx = min(snap.frames)
+    df = snap.frames[idx].copy()
+    df["observation.elbow_pos"] = np.linspace(0.0, 1.0, len(df))
+    df["observation.language"] = pd.Series(["grab the cup"] * len(df), dtype=object)
+    df.loc[df.index[3], "observation.elbow_pos"] = np.nan
+    snap.frames[idx] = df
+    r = check_nan_inf(snap)
+    assert r.status == Status.FAIL, r.message
+    assert any("elbow_pos" in str(b) for b in r.details.get("bad", []))

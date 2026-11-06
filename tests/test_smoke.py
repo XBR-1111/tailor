@@ -1,5 +1,7 @@
 """Smoke tests: package imports and CLI contract hold before any real feature exists."""
 
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 import tailor
@@ -55,3 +57,21 @@ def test_provenance_empty_ledger(tmp_path) -> None:
     result = CliRunner().invoke(app, ["provenance", str(ds)])
     assert result.exit_code == 0
     assert "has not been filtered" in result.stdout
+
+
+def test_fail_on_skip_exit_code(tmp_path: Path) -> None:
+    """--fail-on-skip turns a SKIP-laden green run into exit 3: a CI gate
+    over a meta-only checkout is not a full pass."""
+    from typer.testing import CliRunner
+
+    from tailor.cli import app
+    from test_expectations import make_fixture
+
+    ds = make_fixture(tmp_path)
+    runner = CliRunner()
+    # clean dataset still SKIPs deep checks (video_content default-off) —
+    # enough SKIPs that --fail-on-skip must flag the incomplete verdict
+    r = runner.invoke(app, ["check", str(ds), "--fail-on-skip"])
+    assert r.exit_code == 3, (r.exit_code, r.output)
+    r2 = runner.invoke(app, ["check", str(ds)])
+    assert r2.exit_code == 0  # without the flag a no-FAIL run stays green

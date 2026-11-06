@@ -18,7 +18,8 @@ All notable changes to this project are documented here. The format follows
   severity buckets for all checks, a library of nine benign-finding scenarios
   (binary gripper dimensions saturating the range-edge test by construction,
   dead sensors, teleop pacing, sampled-stats drift, ...), the SKIP-is-not-a-
-  pass trap, and an action template. Core claim verified against the checker:
+  pass trap, an action template, and a usage cookbook (install, per-scenario commands,
+  exit codes). Core claim verified against the checker:
   a binary action dimension hits range-edge pegging in 100% of episodes. — 2026-11-05
 
 External-review round (issue-style triage by three criteria: unnoticed by the

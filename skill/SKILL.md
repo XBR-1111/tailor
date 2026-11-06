@@ -7,6 +7,27 @@ license: MIT
 
 # 解读 tailor 验收报告
 
+## 怎么跑出这份报告
+
+安装：`pip install lerobot-tailor`。输入两种：本地数据集路径，或 HF hub 名（如 `lerobot/pusht`，远程默认只拉元数据——文件级检查会 SKIP，见「假绿陷阱」）。
+
+典型场景配方：
+
+| 场景 | 命令 |
+|---|---|
+| 快速冒烟 | `tailor check <path>` |
+| 大数据集抽查 | `tailor check <path> --max-episodes 100`（默认取尾部 N 集，`--sample first` 可改） |
+| 深扫（视频内容级） | `tailor check <path> --profile deep.yaml`，profile 最小内容：`video_content: {enabled: true}`（深扫默认关，不 profile 不开） |
+| CI 门禁 | `tailor check <path> --json --fail-on-skip \| jq .verdict`（提示信息走 stderr，stdout 纯 JSON 可直接管道） |
+| 远程全量 | `tailor check <hf-name> --full`（下载文件后文件级检查才真正运行） |
+| 报告归档 | `--markdown report.md`（PR / dataset card 友好格式） |
+| 定位坏集 | `tailor filter <path> --from-check`（跑检查并给出该剔除的 episode） |
+| 修复 | `tailor clean`（dry-run 默认，`--apply` 才写） |
+
+退出码：0 通过 · 1 拒收（有 FAIL，或 `--fail-on-warn` 时含 WARN）· 2 输入不可读 · 3 `--fail-on-skip` 且有 SKIP（判定不完整）。
+
+逐 flag 和可调参数参考 docs/cli.md 与 docs/configuration.md，不要凭记忆编 flag。
+
 ## 你会拿到什么
 
 三种载体，内容同源：

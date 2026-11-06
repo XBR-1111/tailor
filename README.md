@@ -183,6 +183,11 @@ Full reference: [every tunable with defaults and guidance](docs/configuration.md
 · [every check's logic and corruption repro](docs/checks.md)
 · [every command and flag](docs/cli.md).
 
+Reading a report: [skill/SKILL.md](skill/SKILL.md) — severity buckets for all
+checks and nine benign-finding scenarios (a binary gripper dimension trips
+range-edge pegging in every episode by construction; sampled stats drift is
+expected under `--max-episodes`), plus the SKIP-is-not-a-pass trap.
+
 ## The 25 acceptance checks
 
 | check | catches |

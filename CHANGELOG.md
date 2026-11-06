@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `--json --markdown` together polluted stdout: the "markdown report: ..." line
+  followed the JSON and every downstream `json.load` / `jq` in CI raised
+  "Extra data" (workaround was `json.JSONDecoder().raw_decode`). The notice
+  now goes to stderr; stdout is parseable with a plain `json.load`. Reported
+  by a user piping `--json` into CI.
+
 ### Added
 - `skill/SKILL.md`: report-interpretation skill (for agents and humans) —
   severity buckets for all checks, a library of nine benign-finding scenarios

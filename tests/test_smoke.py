@@ -75,3 +75,25 @@ def test_fail_on_skip_exit_code(tmp_path: Path) -> None:
     assert r.exit_code == 3, (r.exit_code, r.output)
     r2 = runner.invoke(app, ["check", str(ds)])
     assert r2.exit_code == 0  # without the flag a no-FAIL run stays green
+
+
+def test_json_stdout_stays_pure_with_markdown(tmp_path: Path) -> None:
+    """--json --markdown together: stdout must parse with plain json.load.
+    The 'markdown report:' line used to follow the JSON on stdout, and every
+    downstream json.load / jq in CI choked on it ("Extra data")."""
+    import json as _json
+
+    from typer.testing import CliRunner
+
+    from tailor.cli import app
+    from test_expectations import make_fixture
+
+    ds = make_fixture(tmp_path)
+    runner = CliRunner()  # click>=8.2: stdout/stderr already separated
+    r = runner.invoke(
+        app, ["check", str(ds), "--json", "--markdown", str(tmp_path / "r.md")]
+    )
+    assert r.exit_code == 0, (r.exit_code, r.output)
+    data = _json.loads(r.stdout)  # plain loads, no raw_decode crutch
+    assert data["verdict"] in ("accepted", "rejected")
+    assert (tmp_path / "r.md").is_file()

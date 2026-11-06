@@ -19,6 +19,9 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+# human-facing status lines that must never land in a --json stream on
+# stdout (json.load / jq choke on any extra line: "Extra data")
+err_console = Console(stderr=True)
 
 
 @app.command()
@@ -115,7 +118,7 @@ def check(
         from tailor.report import render_markdown
 
         markdown.write_text(render_markdown(results, str(path)))
-        console.print(f"[dim]markdown report: {markdown}[/dim]")
+        err_console.print(f"[dim]markdown report: {markdown}[/dim]")
     fails = sum(r.status == Status.FAIL for r in results)
     warns = sum(r.status == Status.WARN for r in results)
     skips = sum(r.status == Status.SKIP for r in results)

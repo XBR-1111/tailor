@@ -15,11 +15,14 @@ REPO = Path(__file__).resolve().parent.parent
 MAKE_FIXTURE = REPO / "scripts" / "make_fixture.py"
 
 
-def make_fixture(tmp_path: Path, corrupt: str | None = None, fmt: str = "v2.1") -> Path:
-    out = tmp_path / f"ds_{fmt}_{corrupt or 'clean'}"
+def make_fixture(
+    tmp_path: Path, corrupt: str | None = None, fmt: str = "v2.1", frames: int | None = None
+) -> Path:
+    out = tmp_path / f"ds_{fmt}_{corrupt or 'clean'}_f{frames or 20}"
     subprocess.run(
         [sys.executable, str(MAKE_FIXTURE), str(out), "--format", fmt]
-        + (["--corrupt", corrupt] if corrupt else []),
+        + (["--corrupt", corrupt] if corrupt else [])
+        + (["--frames", str(frames)] if frames else []),
         check=True,
         capture_output=True,
     )
@@ -375,3 +378,43 @@ def test_nan_inf_covers_extra_numeric_columns(tmp_path: Path) -> None:
     r = check_nan_inf(snap)
     assert r.status == Status.FAIL, r.message
     assert any("elbow_pos" in str(b) for b in r.details.get("bad", []))
+
+
+def test_frozen_position_classes_and_ignore(tmp_path: Path) -> None:
+    """Prefix/suffix stalls (collection-side holds) get position tags; a
+    profile's frozen_ignore keeps them out of the verdict while mid stalls
+    stay failing. Real case: DexJoCo keeps ~2 s after success on every
+    episode — 134 edge stalls flooded the report and REJECTED the dataset."""
+    from tailor.expectations import check_video_content
+
+    # default: tail stall fails, tagged suffix
+    ds = make_fixture(tmp_path / "v2s", "video-freeze-suffix", frames=40)
+    snap = load_snapshot(ds)
+    r = check_video_content(snap, {"enabled": True, "frozen_edge_s": 1.0})
+    assert r.status == Status.FAIL, r.message
+    assert any("frozen[suffix]" in str(p) for p in r.details.get("problems", []))
+    assert r.details["frozen_by_position"]["suffix"] >= 1
+
+    # profile ignores suffix: verdict clean, count stays visible
+    r2 = check_video_content(
+        snap, {"enabled": True, "frozen_edge_s": 1.0, "frozen_ignore": ["suffix"]}
+    )
+    assert r2.status == Status.PASS, r2.message
+    assert r2.details["frozen_by_position"]["suffix"] >= 1
+    assert r2.details["frozen_ignored"] >= 1
+
+    # mid stall (existing corruption) stays failing under the same profile
+    ds2 = make_fixture(tmp_path / "v2m", "video-freeze", frames=40)
+    snap2 = load_snapshot(ds2)
+    r3 = check_video_content(
+        snap2, {"enabled": True, "frozen_edge_s": 1.0, "frozen_ignore": ["suffix"]}
+    )
+    assert r3.status == Status.FAIL, r3.message
+    assert any("frozen[mid]" in str(p) for p in r3.details.get("problems", []))
+
+    # clean stays clean with the counter at zero (message unchanged)
+    ds3 = make_fixture(tmp_path / "v2c")
+    snap3 = load_snapshot(ds3)
+    r4 = check_video_content(snap3, {"enabled": True})
+    assert r4.status == Status.PASS, r4.message
+    assert r4.details["frozen_by_position"] == {"prefix": 0, "suffix": 0, "mid": 0}

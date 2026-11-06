@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `video_content` frozen findings are now tagged by position: `frozen[prefix]`,
+  `frozen[suffix]` (collection-side holds — post-reset init, post-success tail;
+  a real DexJoCo run keeps ~2 s after success on every episode) vs
+  `frozen[mid]` (content fault). New tunables `frozen_edge_s` (2.0) and
+  `frozen_ignore` ([]) let profiles keep edge stalls counted in
+  `frozen_by_position` but out of the verdict — the DexJoCo report was 134
+  REJECTED edge stalls with the one genuinely mid-episode item buried. Verdicts
+  are unchanged by default. A requested frame-level `--trim-*-frames` was
+  declined: video re-encode is lossy and v3 shared shards would need full
+  timestamp rewrites — beyond clean's lossless scope.
+
 ### Fixed
 - `--json --markdown` together polluted stdout: the "markdown report: ..." line
   followed the JSON and every downstream `json.load` / `jq` in CI raised

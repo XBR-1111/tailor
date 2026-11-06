@@ -90,9 +90,7 @@ def test_json_stdout_stays_pure_with_markdown(tmp_path: Path) -> None:
 
     ds = make_fixture(tmp_path)
     runner = CliRunner()  # click>=8.2: stdout/stderr already separated
-    r = runner.invoke(
-        app, ["check", str(ds), "--json", "--markdown", str(tmp_path / "r.md")]
-    )
+    r = runner.invoke(app, ["check", str(ds), "--json", "--markdown", str(tmp_path / "r.md")])
     assert r.exit_code == 0, (r.exit_code, r.output)
     data = _json.loads(r.stdout)  # plain loads, no raw_decode crutch
     assert data["verdict"] in ("accepted", "rejected")

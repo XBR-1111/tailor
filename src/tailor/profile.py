@@ -37,6 +37,8 @@ DEFAULTS: dict = {
     "video_content": {
         "enabled": False,
         "frozen_min_s": 1.0,
+        "frozen_edge_s": 2.0,
+        "frozen_ignore": [],
         "flat_min_s": 1.0,
         "blur_p99": 40.0,
         "black_onset": 40.0,

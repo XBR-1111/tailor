@@ -92,6 +92,8 @@ Only the checks below have tunable parameters. Every other check
 | `video_black` | `dark_share` | `0.9` | share of dark frames that makes an edge "black" | raise to 0.95 if your scenes are dim |
 | `video_content` | `enabled` | `false` | **the deep scan is off by default** (full decode, minutes per GB) | turn on for delivery gates and investigation, not per-commit CI |
 | `video_content` | `frozen_min_s` | `1.0` | shortest repeated-frame run that counts as frozen | lower (0.5) for fast cameras that would never stall that long |
+| `video_content` | `frozen_edge_s` | `2.0` | distance from an episode's start/end within which a stall counts as prefix/suffix rather than mid | widen for rigs with long init holds |
+| `video_content` | `frozen_ignore` | `[]` | position classes kept out of the verdict (counted in `frozen_by_position`, never hidden) | `["prefix", "suffix"]` when the recorder routinely holds at episode edges |
 | `video_content` | `black_onset` | `40.0` | minimum brightness just before a mid-file black span for it to count as a fault; darker lead-in means gradual occlusion (a wrist camera approaching an object), not a recorder failure | lower to flag occlusions too, raise to demand a lit→black cut |
 | `video_content` | `flat_min_s` | `1.0` | shortest covered-lens / over-exposure span reported | raise to ignore brief occlusions |
 | `video_content` | `blur_p99` | `40.0` | a frame counts as sharpness-free when its \|Laplacian\| p99 falls below this (64-px grayscale scale: normal cameras measure 76-128, a defocused lens 8-10) | raise to flag softer footage, lower to tolerate it |

@@ -10,6 +10,7 @@ label"): format compliance, metadata-vs-data consistency, integrity.
 
 import json
 import math
+import re
 from collections.abc import Callable
 from itertools import pairwise
 from pathlib import Path
@@ -40,8 +41,8 @@ BLACK_DARK_FRAC = 0.98
 BLUR_EVERY = 5
 
 
-def _ok(name: str, message: str = "") -> CheckResult:
-    return CheckResult(name, Status.PASS, message)
+def _ok(name: str, message: str = "", **details: Any) -> CheckResult:
+    return CheckResult(name, Status.PASS, message, details)
 
 
 def _fail(name: str, message: str, **details: Any) -> CheckResult:
@@ -987,11 +988,22 @@ def _content_problems(measures: dict, cfg: dict) -> list[str]:
     ident = np.asarray(measures["ident"], dtype=bool)
     exact = np.asarray(measures["exact"], dtype=bool)
     # frozen: repeated frames, and a stalled camera's encoder emits mostly
-    # bit-exact repeats — a quarter exact separates stall from a still scene
+    # bit-exact repeats — a quarter exact separates stall from a still scene.
+    # Position carries the semantics: prefix/suffix stalls are usually
+    # collection-side (post-reset hold, post-success tail; a real DexJoCo
+    # case keeps ~2 s after success on every episode) and nearly lossless to
+    # trim, a mid-episode stall is a content fault or a stopped robot.
+    edge = float(cfg.get("frozen_edge_s", 2.0))
     for a, b in _true_runs(t, ident, float(cfg.get("frozen_min_s", 1.0))):
         m = (t >= a) & (t < b)
         if m.any() and float(exact[m].mean()) >= 0.25:
-            problems.append(f"frozen {b - a:.1f}s from {a:.1f}s (repeated frames)")
+            d_start, d_end = a, dur - b
+            pos = (
+                "prefix"
+                if d_start <= edge and d_start <= d_end
+                else ("suffix" if d_end <= edge else "mid")
+            )
+            problems.append(f"frozen[{pos}] {b - a:.1f}s from {a:.1f}s (repeated frames)")
     # black spans away from the file edges (edges are video_black's job).
     # A real recorder failure cuts from a normally lit scene to black; a wrist
     # camera dimming into black has already gone dark for a second before
@@ -1143,9 +1155,41 @@ def check_video_content(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
             seg = m
         for p in _content_problems(seg, cfg):
             problems.append(f"{key} {label}: {p}")
-    if problems:
-        return _fail("video_content", f"{len(problems)} content problem(s)", problems=problems[:10])
-    return _ok("video_content", f"{len(segs)} segment(s) scanned, content clean")
+    # position-aware frozen policy: prefix/suffix stalls are collection-side
+    # redundancy (post-reset hold, post-success tail), not content faults —
+    # profiles can list them in frozen_ignore to keep them visible in the
+    # count but out of the verdict. Counted per position either way so a
+    # flood of edge stalls cannot hide the mid-episode ones in the report.
+    ignore = {str(x) for x in cfg.get("frozen_ignore", [])}
+    frozen_counts = {"prefix": 0, "suffix": 0, "mid": 0}
+    kept: list[str] = []
+    ignored = 0
+    for line in problems:
+        fm = re.match(r"frozen\[(prefix|suffix|mid)\]", line.split(": ", 1)[-1])
+        if fm:
+            frozen_counts[fm.group(1)] += 1
+            if fm.group(1) in ignore:
+                ignored += 1
+                continue
+        kept.append(line)
+    details: dict[str, Any] = {"frozen_by_position": frozen_counts}
+    if ignored:
+        details["frozen_ignored"] = ignored
+    if kept:
+        return _fail(
+            "video_content", f"{len(kept)} content problem(s)", problems=kept[:10], **details
+        )
+    if frozen_counts != {"prefix": 0, "suffix": 0, "mid": 0}:
+        return _ok(
+            "video_content",
+            f"{len(segs)} segment(s) scanned; {ignored} edge stall(s) ignored per profile",
+            **details,
+        )
+    return _ok(
+        "video_content",
+        f"{len(segs)} segment(s) scanned, content clean",
+        frozen_by_position=frozen_counts,
+    )
 
 
 def check_zero_variance(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:

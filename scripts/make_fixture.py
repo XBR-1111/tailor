@@ -49,6 +49,7 @@ CORRUPTIONS = (
     "portability-junk",  # stray debug.log in data/ + top-level notes.txt
     "video-desync",  # v3 only: second camera's to_timestamp drifts 0.3s in ep 1
     "orphan-shard",  # v3 only: unreferenced file-001 copies (data + video) on disk
+    "video-freeze-suffix",  # tail stall: recorder holds ~1.1s after success
 )
 
 
@@ -272,7 +273,13 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
             # file is the head window, so the entire episode must be black
             black = EP_LENGTH if (corrupt == "video-blackout" and ep == 0) else 0
             rate = FPS // 2 if (corrupt == "video-fps" and ep == 0) else FPS
-            freeze = (8, EP_LENGTH) if (corrupt == "video-freeze" and ep == 1) else None
+            if corrupt == "video-freeze" and ep == 1:
+                # mid-episode span, relative so any --frames keeps it mid
+                freeze = (EP_LENGTH // 3, EP_LENGTH // 3 + 12)
+            elif corrupt == "video-freeze-suffix" and ep == 1:
+                freeze = (EP_LENGTH - 11, EP_LENGTH)
+            else:
+                freeze = None
             encode(
                 vdir / f"episode_{ep:06d}.mp4",
                 EP_LENGTH - short,
@@ -292,7 +299,12 @@ def _write_videos(out: Path, fmt: str, corrupt: str | None) -> None:
         black = 30 if corrupt == "video-blackout" else 0
         rate = FPS // 2 if corrupt == "video-fps" else FPS
         # ep1 spans global frames 20-39 in the shared shard; freeze 28-39
-        freeze = (28, 40) if corrupt == "video-freeze" else None
+        if corrupt == "video-freeze":
+            freeze = (28, 40)
+        elif corrupt == "video-freeze-suffix":
+            freeze = (N_EPISODES * EP_LENGTH - 11, N_EPISODES * EP_LENGTH)
+        else:
+            freeze = None
         # v3 has no per-episode cut points in this fixture: blur the whole
         # shard (any long blurred span must trip the check)
         if corrupt == "orphan-shard":

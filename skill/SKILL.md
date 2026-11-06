@@ -66,6 +66,7 @@ license: MIT
 
 ```python
 import numpy as np
+
 arr = snap.col_array(ep_idx, "action")  # (n_frames, dims)
 [np.unique(arr[:, d]).tolist() for d in range(arr.shape[1])]
 ```

@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- CI: `lerobot-compat` canary job. It re-resolves the newest upstream lerobot
+  (`uv lock --upgrade-package lerobot`) and runs the fixture → check → filter
+  pipeline end-to-end, so upstream import-path or dataset-format breaks fail
+  CI instead of users (0.6.1 renamed `lerobot.types` in a patch release).
+  Compatibility manually verified against lerobot 0.7.0 (released 2026-11-05):
+  `delete_episodes`/`LeRobotDataset` signatures unchanged, dataset
+  CODEBASE_VERSION still v3.0, `tailor[lerobot]` stays `lerobot[dataset]>=0.6`.
+
 ### Changed
 - `video_content` frozen findings are now tagged by position: `frozen[prefix]`,
   `frozen[suffix]` (collection-side holds — post-reset init, post-success tail;

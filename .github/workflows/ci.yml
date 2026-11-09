@@ -30,3 +30,25 @@ jobs:
       - run: uv python install ${{ matrix.python }}
       - run: uv sync --python ${{ matrix.python }}
       - run: uv run pytest --cov=tailor --cov-report=term
+
+  lerobot-compat:
+    # Canary for the optional [lerobot] extra: re-resolve to the NEWEST
+    # upstream lerobot, then run the fixture -> check -> filter pipeline
+    # against it. Upstream has renamed modules in a patch release before
+    # (0.6.1 moved lerobot.types); this job should catch that, not users.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv lock --upgrade-package lerobot
+      - run: uv sync --python 3.12 --extra lerobot
+      - name: fixture -> check -> filter end-to-end
+        run: |
+          uv run python scripts/make_fixture.py "$RUNNER_TEMP/ds_v3" --format v3.0
+          uv run tailor check "$RUNNER_TEMP/ds_v3" > /dev/null
+          uv run tailor filter --drop-episodes 1 "$RUNNER_TEMP/ds_v3" > "$RUNNER_TEMP/filter.log" 2>&1
+          tail -3 "$RUNNER_TEMP/filter.log"
+          grep -q "ACCEPTED" "$RUNNER_TEMP/filter.log"

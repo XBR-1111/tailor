@@ -47,7 +47,7 @@ def test_clean_fixture_is_accepted(tmp_path: Path) -> None:
     assert not bad, bad
     snap = load_snapshot(make_fixture(tmp_path))
     results = run_all(snap)
-    assert len(results) == 25  # one more check per release; keep in sync with EXPECTATIONS
+    assert len(results) == 26  # one more check per release; keep in sync with EXPECTATIONS
 
 
 def test_nan_is_caught(tmp_path: Path) -> None:
@@ -418,3 +418,62 @@ def test_frozen_position_classes_and_ignore(tmp_path: Path) -> None:
     r4 = check_video_content(snap3, {"enabled": True})
     assert r4.status == Status.PASS, r4.message
     assert r4.details["frozen_by_position"] == {"prefix": 0, "suffix": 0, "mid": 0}
+
+
+def test_reordered_rows_classified_not_holes(tmp_path: Path) -> None:
+    """Issue #11: a complete permutation must report `reordering`, never `holes`."""
+    from tailor.expectations import check_frame_continuity
+
+    for fmt in ("v2.1", "v3.0"):
+        snap = load_snapshot(make_fixture(tmp_path / fmt, "reordered-rows", fmt))
+        r = check_frame_continuity(snap)
+        assert r.status == Status.FAIL, (fmt, r.message)
+        assert "reordering" in r.message, (fmt, r.message)
+        assert "holes" not in r.message, (fmt, r.message)
+        assert "length_mismatch" not in r.message, (fmt, r.message)
+
+
+def test_reordered_rows_index_column_stays_consistent(tmp_path: Path) -> None:
+    """Whole-row shuffle keeps index == offset + frame_index per row (order-free)."""
+    from tailor.expectations import check_index_column
+
+    for fmt in ("v2.1", "v3.0"):
+        snap = load_snapshot(make_fixture(tmp_path / fmt, "reordered-rows", fmt))
+        r = check_index_column(snap)
+        assert r.status == Status.PASS, (fmt, r.message)
+
+
+def test_index_mislabel_caught_and_old_checks_blind(tmp_path: Path) -> None:
+    """Issue #11 blind spot: wrong index column passes frame_continuity/timestamps,
+    only the new index_column check catches it."""
+    from tailor.expectations import check_frame_continuity, check_index_column, check_timestamps
+
+    for fmt in ("v2.1", "v3.0"):
+        snap = load_snapshot(make_fixture(tmp_path / fmt, "index-mislabel", fmt))
+        r = check_index_column(snap)
+        assert r.status == Status.FAIL, (fmt, r.message)
+        assert "1" in r.message and "mislabeled" in r.message, (fmt, r.message)
+        # the pre-existing suite stays green on this corruption
+        assert check_frame_continuity(snap).status == Status.PASS, fmt
+        assert check_timestamps(snap).status == Status.PASS, fmt
+
+
+def test_clean_fixture_index_column_passes(tmp_path: Path) -> None:
+    from tailor.expectations import check_index_column
+
+    for fmt in ("v2.1", "v3.0"):
+        snap = load_snapshot(make_fixture(tmp_path / fmt, None, fmt))
+        r = check_index_column(snap)
+        assert r.status == Status.PASS, (fmt, r.message)
+
+
+def test_stats_drift_severity_tracks_coverage(tmp_path: Path) -> None:
+    """Issue #11: sampled-run drift is WARN; full-run drift keeps FAIL teeth."""
+    ds = make_fixture(tmp_path / "s", "stats-mismatch", "v2.1")
+    snap = load_snapshot(ds, max_episodes=1)
+    sampled = next(r for r in run_all(snap) if r.name == "stats_recompute")
+    assert sampled.status == Status.WARN, sampled.message
+    assert "coverage" in sampled.message, sampled.message
+
+    full = next(r for r in run_all(load_snapshot(ds)) if r.name == "stats_recompute")
+    assert full.status == Status.FAIL, full.message

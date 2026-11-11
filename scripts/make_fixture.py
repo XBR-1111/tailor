@@ -45,6 +45,8 @@ CORRUPTIONS = (
     "zero-variance",  # state dim 0 frozen at a constant (dead sensor)
     "schema-drop",  # v2 only: episode 1 parquet loses the observation.state column
     "dropped-frames",  # episode 0 loses frames 8-10: holes in frame_index, rows<length
+    "reordered-rows",  # episode 1 rows shuffled (complete permutation, values intact per row)
+    "index-mislabel",  # episode 1 index column restarts at 0 instead of the global offset
     "duplicate-episode",  # episode 2 copies episode 0's state/action trajectories
     "portability-junk",  # stray debug.log in data/ + top-level notes.txt
     "video-desync",  # v3 only: second camera's to_timestamp drifts 0.3s in ep 1
@@ -105,6 +107,13 @@ def make_v2(out: Path, corrupt: str | None) -> Path:
             df = df.drop(columns=["observation.state"])
         if corrupt == "dropped-frames" and ep == 0:
             df = df.drop(index=[8, 9, 10]).reset_index(drop=True)
+        if corrupt == "reordered-rows" and ep == 1:
+            # whole-row shuffle: every value travels with its row, so the
+            # dataset is complete but stored out of time order
+            df = df.sample(frac=1.0, random_state=7).reset_index(drop=True)
+        if corrupt == "index-mislabel" and ep == 1:
+            # rewrite accident: global offset forgotten, index restarts at 0
+            df["index"] = np.arange(EP_LENGTH)
         df.to_parquet(out / "data" / "chunk-000" / f"episode_{ep:06d}.parquet", index=False)
         total_frames += EP_LENGTH
 
@@ -145,6 +154,13 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
         df = _trajectory(rng, ep, corrupt)
         df["index"] = np.arange(total_frames, total_frames + EP_LENGTH)
         df["next.done"] = False
+        if corrupt == "reordered-rows" and ep == 1:
+            # whole-row shuffle: every value travels with its row, so the
+            # dataset is complete but stored out of time order
+            df = df.sample(frac=1.0, random_state=7).reset_index(drop=True)
+        if corrupt == "index-mislabel" and ep == 1:
+            # rewrite accident: global offset forgotten, index restarts at 0
+            df["index"] = np.arange(EP_LENGTH)
         if ep == 0:
             ep0_df = df
         if corrupt == "duplicate-episode" and ep == 2 and ep0_df is not None:

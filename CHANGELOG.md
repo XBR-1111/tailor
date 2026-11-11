@@ -4,9 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.12.0] — 2026-11-11
 
 ### Added
+- `index_column` check (closes #11): every row must satisfy
+  `index == episode_offset + frame_index` (compared per row, order-free), and
+  v3.0 rows must sit inside their declared `[dataset_from_index,
+  dataset_to_index)` window. Catches rewrite/concat accidents that mislabel the
+  global row identity — a real v3.0 dataset with 99.82% mislabeled rows passed
+  the entire suite. Offsets accumulate *declared* lengths, so the verdict holds
+  under `--max-episodes`. New corruptions: `index-mislabel` (old checks stay
+  green on it — the blind spot reproduced) and `reordered-rows`.
 - CI: `lerobot-compat` canary job. It re-resolves the newest upstream lerobot
   (`uv lock --upgrade-package lerobot`) and runs the fixture → check → filter
   pipeline end-to-end, so upstream import-path or dataset-format breaks fail
@@ -14,34 +22,34 @@ All notable changes to this project are documented here. The format follows
   Compatibility manually verified against lerobot 0.7.0 (released 2026-11-05):
   `delete_episodes`/`LeRobotDataset` signatures unchanged, dataset
   CODEBASE_VERSION still v3.0, `tailor[lerobot]` stays `lerobot[dataset]>=0.6`.
+- `skill/`: usage cookbook in the report-interpretation skill — install,
+  per-scenario commands, exit codes.
 
 ### Changed
+- `frame_continuity` findings now come in three classes with different repairs
+  (closes #11): `length_mismatch`, `reordering` (a complete permutation stored
+  out of order — FAIL, not WARN: official readers use row position as frame
+  identity), and `holes`. Previously any permutation reported as "dropped
+  frames", sending the repair handoff toward the wrong fix.
+- `stats_recompute` severity now tracks coverage (closes #11): below
+  `coverage_threshold` (default 0.95) of `total_frames` sampled, drift
+  downgrades to WARN naming the coverage fraction — a 20-of-426k sample cannot
+  indict full-dataset stats.json. Full runs keep FAIL teeth.
 - `video_content` frozen findings are now tagged by position: `frozen[prefix]`,
-  `frozen[suffix]` (collection-side holds — post-reset init, post-success tail;
-  a real DexJoCo run keeps ~2 s after success on every episode) vs
-  `frozen[mid]` (content fault). New tunables `frozen_edge_s` (2.0) and
+  `frozen[suffix]` (collection-side holds — post-reset init, post-success tail)
+  vs `frozen[mid]` (content fault). New tunables `frozen_edge_s` (2.0) and
   `frozen_ignore` ([]) let profiles keep edge stalls counted in
-  `frozen_by_position` but out of the verdict — the DexJoCo report was 134
-  REJECTED edge stalls with the one genuinely mid-episode item buried. Verdicts
-  are unchanged by default. A requested frame-level `--trim-*-frames` was
-  declined: video re-encode is lossy and v3 shared shards would need full
-  timestamp rewrites — beyond clean's lossless scope.
+  `frozen_by_position` but out of the verdict. Verdicts unchanged by default.
 
 ### Fixed
 - `--json --markdown` together polluted stdout: the "markdown report: ..." line
   followed the JSON and every downstream `json.load` / `jq` in CI raised
-  "Extra data" (workaround was `json.JSONDecoder().raw_decode`). The notice
-  now goes to stderr; stdout is parseable with a plain `json.load`. Reported
-  by a user piping `--json` into CI.
+  "Extra data". The notice now goes to stderr; stdout is parseable with a
+  plain `json.load`. Reported by a user piping `--json` into CI.
 
-### Added
-- `skill/SKILL.md`: report-interpretation skill (for agents and humans) —
-  severity buckets for all checks, a library of nine benign-finding scenarios
-  (binary gripper dimensions saturating the range-edge test by construction,
-  dead sensors, teleop pacing, sampled-stats drift, ...), the SKIP-is-not-a-
-  pass trap, an action template, and a usage cookbook (install, per-scenario commands,
-  exit codes). Core claim verified against the checker:
-  a binary action dimension hits range-edge pegging in 100% of episodes. — 2026-11-05
+## [Unreleased]
+
+## [0.11.0] — 2026-11-05
 
 External-review round (issue-style triage by three criteria: unnoticed by the
 author, hit by real data, cheap to fix). All six findings were verified

@@ -1,4 +1,4 @@
-# The 25 acceptance checks
+# The 26 acceptance checks
 
 Every check is independent, read-only and cheap by default: the whole suite
 runs in about 3 s on 1.4 GB of real data. Each result is PASS, WARN, FAIL, or
@@ -78,9 +78,11 @@ match the declared feature shapes.
 (episode 0 stamped all-zero).
 
 **`stats_recompute`** — declared `meta/stats.json` mean/std match values
-recomputed from the parquet, within `mean_tolerance`. Catches stats generated
-for a different data revision. Reproduce: `--corrupt stats-mismatch`
-(action mean shifted by 0.5).
+recomputed from the parquet, within `mean_tolerance`. Severity tracks
+coverage: below `coverage_threshold` (default 95%) of `total_frames` sampled,
+drift downgrades to WARN naming the coverage — a subset cannot indict the
+full-dataset stats. Catches stats generated for a different data revision.
+Reproduce: `--corrupt stats-mismatch` (action mean shifted by 0.5).
 
 **`action_quality`** — three trajectory defect classes, all WARN-level by
 default: frozen runs (`frozen_frames` consecutive identical actions), range
@@ -98,7 +100,18 @@ training-loop concatenation. Reproduce: `--corrupt schema-drop` (v2: episode 1
 loses `observation.state`).
 
 **`frame_continuity`** — row count matches declared length and `frame_index`
-has no holes. Reproduce: `--corrupt dropped-frames` (frames 8–10 removed).
+is intact. Findings come in three classes with different repairs:
+`length_mismatch` (rows vs declared), `reordering` (a complete permutation
+stored out of order — FAIL, because official readers use row position as
+frame identity), `holes` (values genuinely missing). Reproduce: `--corrupt
+dropped-frames`, `--corrupt reordered-rows`.
+
+**`index_column`** — every row satisfies `index == episode_offset +
+frame_index` (order-free, per row), and v3.0 rows sit inside their declared
+`[dataset_from_index, dataset_to_index)` window. Catches rewrite/concat
+accidents that mislabel the global row identity while leaving frame_index
+and timestamps untouched. Offsets accumulate declared lengths, so the verdict
+holds under `--max-episodes`. Reproduce: `--corrupt index-mislabel`.
 
 **`duplicate_episodes`** — no byte-identical state/action pairs across
 episodes (WARN; says which episodes pair up). Reproduce: `--corrupt

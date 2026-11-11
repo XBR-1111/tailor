@@ -416,10 +416,26 @@ def check_stats_recompute(snap: DatasetSnapshot, cfg: dict | None = None) -> Che
             if drift > mean_tol:
                 drift_report.append((col, stat_name, round(drift, 4)))
     if drift_report:
+        # A sampled run (e.g. --max-episodes 20 of 400k) recomputes stats over
+        # a subset; drift against full-dataset stats.json is then expected and
+        # unattributable. Severity tracks coverage instead of a blanket WARN,
+        # which would defang full-run checks. Unknown total keeps FAIL teeth.
+        total = (snap.info or {}).get("total_frames") or 0
+        sampled = sum(len(df) for df in snap.frames.values())
+        coverage = sampled / total if total else 1.0
+        details = {"drift": drift_report[:10]}
+        if coverage < cfg.get("coverage_threshold", 0.95):
+            return _warn(
+                "stats_recompute",
+                f"declared stats drift beyond {mean_tol:.0%} of scale, but only "
+                f"{sampled}/{total} frames sampled ({coverage:.0%}) — insufficient "
+                f"coverage to attribute; rerun without --max-episodes",
+                **details,
+            )
         return _fail(
             "stats_recompute",
             f"declared stats drift beyond {mean_tol:.0%} of scale (recompute mismatch)",
-            drift=drift_report[:10],
+            **details,
         )
     return _ok("stats_recompute")
 
@@ -1250,27 +1266,131 @@ def check_frame_continuity(snap: DatasetSnapshot, cfg: dict | None = None) -> Ch
     cfg = cfg or {}
     if not snap.frames:
         return _skip("frame_continuity", "no readable frames")
-    problems = []
+    # three defect classes with different repairs; order = report order
+    by_class: dict[str, list[tuple[int, str]]] = {
+        "length_mismatch": [],  # rows vs declared episode length
+        "reordering": [],  # complete but stored out of order (a permutation)
+        "holes": [],  # frame_index values genuinely missing
+    }
     declared = {ep.get("episode_index"): ep.get("length") for ep in (snap.episodes or [])}
     for idx, df in sorted(snap.frames.items()):
         n = len(df)
         if idx in declared and declared[idx] is not None and n != declared[idx]:
-            problems.append((idx, f"{n} rows vs declared length {declared[idx]}"))
+            by_class["length_mismatch"].append(
+                (idx, f"{n} rows vs declared length {declared[idx]}")
+            )
             continue
         if "frame_index" in df.columns:
             fi = np.asarray(df["frame_index"])
-            # holes = any position where frame_index deviates from 0..n-1
             if fi.size and (fi != np.arange(fi.size)).any():
-                first_hole = int(np.flatnonzero(fi != np.arange(fi.size))[0])
-                problems.append((idx, f"frame_index has holes (first at {first_hole})"))
+                if np.array_equal(np.sort(fi), np.arange(fi.size)):
+                    # complete but reordered: FAIL, not WARN — official readers
+                    # use row position as frame identity, so shuffled storage
+                    # corrupts consumers even though no value is missing
+                    by_class["reordering"].append(
+                        (
+                            idx,
+                            "rows stored out of order (complete, sortable by frame_index); "
+                            "consumers reading by row position get shuffled frames",
+                        )
+                    )
+                else:
+                    first_hole = int(np.flatnonzero(fi != np.arange(fi.size))[0])
+                    by_class["holes"].append(
+                        (idx, f"frame_index has holes (first at {first_hole})")
+                    )
+    problems = by_class["length_mismatch"] + by_class["reordering"] + by_class["holes"]
     if problems:
+        parts = [f"{len(v)} {k}" for k, v in by_class.items() if v]
         return _fail(
             "frame_continuity",
-            f"{len(problems)} continuity problem(s): dropped frames or row/length mismatch",
+            f"continuity problems: {', '.join(parts)}",
             problems=problems[:10],
             episodes=sorted({p[0] for p in problems if isinstance(p[0], int)}),
         )
     return _ok("frame_continuity")
+
+
+def check_index_column(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
+    """Global row identity: index == episode_offset + frame_index, per row.
+
+    The official writer stamps `index` as a global chronological counter while
+    consumers address frames by row position, so an `index` column that
+    disagrees with episode_offset + frame_index (order-independent, compared
+    per row) means a rewrite/concatenation accident — every consumer trusting
+    `index` as time order is silently wrong. Offset accumulates *declared*
+    lengths, so the verdict holds under --max-episodes sampling.
+    """
+    cfg = cfg or {}
+    if not snap.frames:
+        return _skip("index_column", "no readable frames")
+    if not snap.episodes:
+        return _skip("index_column", "episode metadata unreadable")
+    has_cols = all(
+        "index" in df.columns and "frame_index" in df.columns for df in snap.frames.values()
+    )
+    if not has_cols:
+        return _skip("index_column", "index/frame_index column absent from sampled frames")
+
+    def ep_len(ep: dict) -> int | None:
+        if ep.get("length") is not None:
+            return int(ep["length"])
+        raw_idx = ep.get("episode_index")
+        if not isinstance(raw_idx, int):
+            return None
+        loaded = snap.frames.get(raw_idx)
+        return len(loaded) if loaded is not None else None
+
+    problems = []
+    checked = 0
+    offset = 0
+    for ep in sorted(snap.episodes, key=lambda e: e.get("episode_index", -1)):
+        raw_idx = ep.get("episode_index")
+        if not isinstance(raw_idx, int):
+            break
+        idx = raw_idx
+        ln = ep_len(ep)
+        if ln is None:
+            # offset chain broken: later episodes have no trustworthy anchor
+            break
+        df = snap.frames.get(idx)
+        if df is not None and "index" in df.columns and "frame_index" in df.columns and len(df):
+            expected = offset + np.asarray(df["frame_index"])
+            actual = np.asarray(df["index"])
+            checked += len(df)
+            bad = int((actual != expected).sum())
+            if bad:
+                first = int(np.flatnonzero(actual != expected)[0])
+                problems.append(
+                    (
+                        idx,
+                        f"{bad}/{len(df)} rows ({bad / len(df):.1%}) index != "
+                        f"episode_offset + frame_index (first at row {first})",
+                    )
+                )
+            # v3.0 only: rows must also sit inside the declared global window
+            f_from, f_to = ep.get("dataset_from_index"), ep.get("dataset_to_index")
+            if f_from is not None and f_to is not None and (
+                expected.min() < f_from or expected.max() >= f_to
+            ):
+                    problems.append(
+                        (
+                            idx,
+                            f"expected range [{int(expected.min())},{int(expected.max())}] outside "
+                            f"declared [{f_from},{f_to})",
+                        )
+                    )
+        offset += ln
+    if problems:
+        return _fail(
+            "index_column",
+            f"{len(problems)} episode(s) with mislabeled index column",
+            problems=problems[:10],
+            episodes=sorted({p[0] for p in problems if isinstance(p[0], int)}),
+        )
+    if checked == 0:
+        return _skip("index_column", "no anchored episodes to check")
+    return _ok("index_column", f"{checked} sampled rows match episode_offset + frame_index")
 
 
 def check_training_readiness(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
@@ -1468,6 +1588,7 @@ EXPECTATIONS: dict[str, Expectation] = {
         check_zero_variance,
         check_schema_consistency,
         check_frame_continuity,
+        check_index_column,
         check_training_readiness,
         check_portability,
         check_duplicate_episodes,

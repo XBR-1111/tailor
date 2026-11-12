@@ -9,6 +9,7 @@ frames -> {episode_index: DataFrame}. Expectations never branch on version.
 """
 
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import cast
@@ -16,6 +17,8 @@ from typing import cast
 import pandas as pd
 
 from tailor.model import DatasetSnapshot
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_VERSIONS = ("v2.0", "v2.1", "v3.0")
 
@@ -114,10 +117,12 @@ def _load_v3_episodes(meta: Path) -> list[dict] | None:
     if not files:
         return None
     rows = []
-    try:
-        for f in files:
+    for f in files:
+        try:
             for r in pd.read_parquet(f).to_dict("records"):
-                tasks = r.get("tasks") or []
+                tasks = r.get("tasks")
+                if tasks is None:
+                    tasks = []
                 # v3 stores task TEXT per episode; only integer index lists
                 # yield a task_index — text lists leave None and the range
                 # check degrades to the total_tasks consistency check.
@@ -129,8 +134,14 @@ def _load_v3_episodes(meta: Path) -> list[dict] | None:
                     else None
                 )
                 rows.append(r)
-    except Exception:
-        return None
+        except Exception as exc:
+            # swallowing is deliberate (defensive loader contract: unreadable
+            # metadata becomes a clean FAIL), but never silently — name the
+            # file so an "unreadable" verdict can be traced to its cause
+            logger.warning(
+                "v3 episodes parquet unreadable, ignoring %s (%s: %s)", f, type(exc).__name__, exc
+            )
+            return None
     rows.sort(key=lambda r: r.get("episode_index", -1))
     return rows
 

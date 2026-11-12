@@ -477,3 +477,15 @@ def test_stats_drift_severity_tracks_coverage(tmp_path: Path) -> None:
 
     full = next(r for r in run_all(load_snapshot(ds)) if r.name == "stats_recompute")
     assert full.status == Status.FAIL, full.message
+
+
+def test_multi_task_v3_loads_and_checks_run(tmp_path: Path) -> None:
+    """Regression (issue #12 candidate): episodes whose v3 `tasks` cell is a
+    multi-element ndarray used to crash the loader's truthiness test, silently
+    turning the whole dataset into "unreadable". Legal shape — must load."""
+    ds = make_fixture(tmp_path / "mt", "multi-task", "v3.0")
+    snap = load_snapshot(ds)
+    assert snap.readable, "multi-task episode must not make the dataset unreadable"
+    assert snap.episodes is not None and len(snap.episodes) == 3
+    st = {r.name: r.status for r in run_all(snap)}
+    assert "frame_continuity" in st  # the suite ran end-to-end

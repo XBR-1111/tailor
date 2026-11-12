@@ -45,6 +45,8 @@ CORRUPTIONS = (
     "zero-variance",  # state dim 0 frozen at a constant (dead sensor)
     "schema-drop",  # v2 only: episode 1 parquet loses the observation.state column
     "dropped-frames",  # episode 0 loses frames 8-10: holes in frame_index, rows<length
+    "multi-task",  # v3 only, NOT corruption: episode 0 carries 2 task texts (regression
+    # for the loader crash: ndarray truth-value ambiguity made the dataset unreadable)
     "reordered-rows",  # episode 1 rows shuffled (complete permutation, values intact per row)
     "index-mislabel",  # episode 1 index column restarts at 0 instead of the global offset
     "duplicate-episode",  # episode 2 copies episode 0's state/action trajectories
@@ -195,7 +197,11 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
                     if corrupt == "video-desync"
                     else {}
                 ),
-                "tasks": ["pick up the cube"],
+                "tasks": (
+                    ["pick up the cube", "place it down"]
+                    if (corrupt == "multi-task" and ep == 0)
+                    else ["pick up the cube"]
+                ),
                 "length": length,
             }
         )

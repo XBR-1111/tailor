@@ -49,6 +49,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-11-12
+
+### Fixed
+- v3.0 chunked datasets whose episode `tasks` cell is a multi-element ndarray
+  (e.g. DROID-style multi-task episodes) crashed the loader's truthiness test
+  (`tasks or []` → numpy ValueError), which the defensive except swallowed —
+  the whole dataset reported as unreadable with zero diagnostics (fixes #12).
+  Legal shape now loads and checks clean. The except branch logs a per-file
+  warning naming the unreadable parquet, so "unreadable" verdicts are traceable.
+  New `--corrupt multi-task` fixture pins the regression.
+
 ## [0.11.0] — 2026-11-05
 
 External-review round (issue-style triage by three criteria: unnoticed by the

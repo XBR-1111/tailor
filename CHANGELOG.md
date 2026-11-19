@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.1] — 2026-11-19
+
+### Fixed
+- LeRobot v3 acceptance rejects misplaced episodes, out-of-order Parquet
+  rows across episodes or shards, and incorrect global episode windows.
+  Window validation also runs in metadata-only checks.
+- `tailor clean` recomputes existing numerical quantiles exactly across
+  Parquet shards, so extreme outliers no longer distort percentile estimates.
+  The dry run also reports drift in existing quantiles.
+
 ## [0.14.0] — 2026-11-19
 
 ### Added

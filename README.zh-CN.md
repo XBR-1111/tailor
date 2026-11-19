@@ -106,7 +106,8 @@ tailor run examples/unitree.yaml --apply --json
 ## Clean——确定性修复
 
 `tailor clean` 按 `frame_index / fps` 修复时间戳，再用修复后的 Parquet 值重算
-`meta/stats.json`，并保留视频等未处理特征的统计。默认预览修复。`--apply` 会先把被
+`meta/stats.json`，并保留视频等未处理特征的统计。已有的数值分位数会精确重算，
+多分片数据会占用临时磁盘空间。默认预览修复。`--apply` 会先把被
 替换的文件备份到数据集外的 `<dataset>_pre_clean/`，修复后自动复检。拒收时退出码为 `1`。
 
 ```bash
@@ -139,7 +140,7 @@ workflow，你的流水线一行就能对数据集设门禁：
 # your-repo/.github/workflows/dataset-quality.yml
 jobs:
   check-dataset:
-    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.14.0
+    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.14.1
     with:
       dataset: lerobot/unitreeh1_fold_clothes   # HF repo id、本地路径或 .zip
       fail-on-warn: false
@@ -189,7 +190,7 @@ tailor check /data/dataset --profile my_requirements.yaml
 | codebase_version | 格式版本不在 v2.0/v2.1/v3.0 支持范围内 |
 | fps | fps 非正数或异常偏小 |
 | episodes_metadata | episode 元数据缺失或不可解析 |
-| episode_files | 数据分片/parquet 在磁盘上缺失（v2 按文件、v3 按分片指针查） |
+| episode_files | Parquet 缺失或无法读取、v3 分片归属和轨迹顺序 |
 | total_frames | 声明的总帧数 ≠ 各 episode 长度之和 |
 | episode_lengths | 长度为零/负数；过短的 episode（会破坏 chunk 采样） |
 | task_indices | task 引用越界；声明的任务数与实际不符 |

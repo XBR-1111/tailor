@@ -118,7 +118,9 @@ See the [recipe CLI reference](docs/cli.md#run).
 
 `tailor clean` rebuilds timestamps as `frame_index / fps` and recomputes
 `meta/stats.json` from the resulting Parquet values. It preserves statistics
-for unprocessed features like video. By default it previews the repair.
+for unprocessed features like video. Existing numerical percentiles are
+recomputed exactly, using temporary disk space for multi-shard data. By
+default it previews the repair.
 `--apply` backs up replaced files to `<dataset>_pre_clean/` outside the dataset
 root, applies the repair, then re-checks the dataset. A rejection exits `1`.
 
@@ -164,7 +166,7 @@ this repo — one line gates a dataset in your pipeline:
 # your-repo/.github/workflows/dataset-quality.yml
 jobs:
   check-dataset:
-    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.14.0
+    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.14.1
     with:
       dataset: lerobot/unitreeh1_fold_clothes   # HF repo id, local path, or .zip
       fail-on-warn: false
@@ -221,7 +223,7 @@ expected under `--max-episodes`), plus the SKIP-is-not-a-pass trap.
 | codebase_version | format version outside v2.0/v2.1/v3.0 |
 | fps | non-positive or unusual fps |
 | episodes_metadata | missing/invalid episode metadata |
-| episode_files | data shard/parquet missing on disk (v2 files, v3 shard pointers) |
+| episode_files | missing or unreadable Parquet, v3 shard membership and episode order |
 | total_frames | declared total ≠ sum of episode lengths |
 | episode_lengths | zero/negative lengths; very short episodes that break chunked sampling |
 | task_indices | task references out of range; declared task count mismatch |

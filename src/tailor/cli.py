@@ -319,7 +319,7 @@ def clean(
     if not snap.readable:
         console.print("[red]dataset unreadable[/red]")
         raise typer.Exit(code=2)
-    from tailor.cleaning import apply_clean, recompute_stats
+    from tailor.cleaning import _QUANTILE_KEY, apply_clean, recompute_stats
     from tailor.expectations import check_episode_files
 
     do_stats, do_ts = not no_stats, not no_timestamps
@@ -344,7 +344,7 @@ def clean(
         if do_stats and stats.is_file():
             try:
                 fresh = recompute_stats(snap, timestamp_files=files, fps=fps)
-            except ValueError as e:
+            except (ValueError, OSError) as e:
                 err_console.print(f"[red]cannot recompute stats:[/red] {e}")
                 raise typer.Exit(code=2) from e
             old = json.loads(stats.read_text())
@@ -353,8 +353,10 @@ def clean(
             cols = [c for c in fresh if c in old and c not in ("timestamp",)]
             diffs = []
             for c in cols:
-                for stat in ("mean", "std"):
-                    if stat not in old[c] or stat not in fresh[c]:
+                for stat in fresh[c]:
+                    if stat not in ("mean", "std") and not _QUANTILE_KEY.fullmatch(stat):
+                        continue
+                    if stat not in old[c]:
                         continue
                     a, b = np.asarray(old[c][stat], float), np.asarray(fresh[c][stat], float)
                     if a.shape != b.shape or not a.size:
@@ -399,7 +401,7 @@ def clean(
 
     try:
         report = apply_clean(snap, stats=do_stats, timestamps=do_ts)
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         err_console.print(f"[red]cannot clean dataset:[/red] {e}")
         raise typer.Exit(code=2) from e
     from tailor.ledger import append_event, event_for_clean

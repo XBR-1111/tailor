@@ -49,6 +49,8 @@ CORRUPTIONS = (
     "multi-task",  # v3 only, NOT corruption: episode 0 carries 2 task texts (regression
     # for the loader crash: ndarray truth-value ambiguity made the dataset unreadable)
     "reordered-rows",  # episode 1 rows shuffled (complete permutation, values intact per row)
+    "reordered-episodes",  # v3: swap the first two complete episodes in one shard
+    "overlapping-window",  # v3: first episode's metadata extends into the second
     "index-mislabel",  # episode 1 index column restarts at 0 instead of the global offset
     "duplicate-episode",  # episode 2 copies episode 0's state/action trajectories
     "portability-junk",  # stray debug.log in data/ + top-level notes.txt
@@ -208,6 +210,10 @@ def make_v3(out: Path, corrupt: str | None) -> Path:
         )
         total_frames += EP_LENGTH
 
+    if corrupt == "reordered-episodes":
+        frames[0], frames[1] = frames[1], frames[0]
+    if corrupt == "overlapping-window":
+        episodes_meta[0]["dataset_to_index"] = 2 * EP_LENGTH
     shard = pd.concat(frames, ignore_index=True)
     if corrupt == "dropped-frames":
         shard = shard.drop(index=[8, 9, 10]).reset_index(drop=True)

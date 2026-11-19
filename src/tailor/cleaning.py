@@ -7,13 +7,15 @@ portability checks stay clean.
 """
 
 import json
+import mmap
 import re
 import shutil
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryFile
+from typing import BinaryIO
 
 import numpy as np
 import pandas as pd
@@ -32,6 +34,7 @@ _NUMERIC_COLS = (
     "episode_index",
     "task_index",
 )
+_QUANTILE_KEY = re.compile(r"q(?:[0-9]{2}|100)")
 
 
 @dataclass
@@ -83,86 +86,56 @@ def recompute_stats(
                     raise ValueError(f"cannot recompute {col!r}: non-finite values in {path}")
                 yield col, arr.reshape(len(arr), -1)
 
-    running: dict[str, RunningStats] = {}
-    quantile_fields: dict[str, list[str]] = {}
-    exact_quantiles: dict[str, dict] = {}
-    for col, arr in _columns(_NUMERIC_COLS):
-        running.setdefault(col, RunningStats()).update(arr)
-        previous = out.get(col, {})
-        if col not in quantile_fields:
-            quantile_fields[col] = (
-                [k for k in previous if re.fullmatch(r"q(?:[0-9]{2}|100)", k)]
-                if isinstance(previous, dict)
-                else []
-            )
-        fields = quantile_fields[col]
-        if fields and len(files) == 1:
-            values = np.quantile(arr, [int(k[1:]) / 100 for k in fields], axis=0)
-            exact_quantiles[col] = dict(zip(fields, values.tolist(), strict=True))
-
-    # One shard can be evaluated exactly. Across shards, use a fixed-size
-    # histogram per dimension instead of materializing the full dataset.
-    histograms = {
-        col: _QuantileHistogram(running[col].min, running[col].max)
-        for col, fields in quantile_fields.items()
-        if fields and col not in exact_quantiles
+    quantile_levels = {
+        col: {k: int(k[1:]) / 100 for k in previous if _QUANTILE_KEY.fullmatch(k)}
+        for col in _NUMERIC_COLS
+        if isinstance(previous := out.get(col), dict)
     }
-    if histograms:
-        for col, arr in _columns(list(histograms)):
-            histograms[col].update(arr)
+    running: dict[str, RunningStats] = {}
+    widths: dict[str, int] = {}
+    quantiles: dict[str, dict[str, list[float]]] = {}
+    samples: dict[str, BinaryIO] = {}
+    with ExitStack() as scratch:
+        for col, arr in _columns(_NUMERIC_COLS):
+            width = arr.shape[1]
+            if widths.setdefault(col, width) != width or width == 0:
+                raise ValueError(f"cannot recompute {col!r}: inconsistent feature width")
+            running.setdefault(col, RunningStats()).update(arr)
+            levels = quantile_levels.get(col)
+            if not levels:
+                continue
+            if len(files) == 1:
+                values = np.quantile(arr, list(levels.values()), axis=0)
+                quantiles[col] = dict(zip(levels, values.tolist(), strict=True))
+            else:
+                if col not in samples:
+                    samples[col] = scratch.enter_context(TemporaryFile(mode="w+b"))
+                np.asarray(arr, dtype=np.float64).tofile(samples[col])
 
-    for col, r in running.items():
-        quantiles = exact_quantiles.get(col, {})
-        if col in histograms:
-            quantiles = histograms[col].quantiles(quantile_fields[col])
-        out[col] = {
-            "min": r.min.tolist(),
-            "max": r.max.tolist(),
-            "mean": r.mean.tolist(),
-            "std": r.std.tolist(),
-            "count": [int(r.count[0])],
-            **quantiles,
-        }
+        for col, stats in running.items():
+            count = int(stats.count[0])
+            if col in samples:
+                levels = quantile_levels[col]
+                # Work on a private disk-backed array. NumPy partitions the
+                # temporary samples in place, without copying the full matrix.
+                with mmap.mmap(samples[col].fileno(), 0, access=mmap.ACCESS_WRITE) as mapped:
+                    matrix: np.ndarray = np.ndarray(
+                        (count, widths[col]), dtype=np.float64, buffer=mapped
+                    )
+                    values = np.quantile(
+                        matrix, list(levels.values()), axis=0, overwrite_input=True
+                    )
+                    del matrix
+                quantiles[col] = dict(zip(levels, values.tolist(), strict=True))
+            out[col] = {
+                "min": stats.min.tolist(),
+                "max": stats.max.tolist(),
+                "mean": stats.mean.tolist(),
+                "std": stats.std.tolist(),
+                "count": [count],
+                **quantiles.get(col, {}),
+            }
     return out
-
-
-class _QuantileHistogram:
-    """Approximate cross-shard quantiles within observed per-bin bounds."""
-
-    _BINS = 5000
-
-    def __init__(self, lo: np.ndarray, hi: np.ndarray) -> None:
-        self._lo = lo
-        self._span = np.where(hi > lo, hi - lo, 1.0)
-        shape = (len(lo), self._BINS)
-        self._counts = np.zeros(shape, dtype=np.int64)
-        self._minima = np.full(shape, np.inf)
-        self._maxima = np.full(shape, -np.inf)
-
-    def update(self, arr: np.ndarray) -> None:
-        for dim, values in enumerate(arr.T):
-            pos = (values - self._lo[dim]) / self._span[dim]
-            bins = np.clip((pos * self._BINS).astype(int), 0, self._BINS - 1)
-            np.add.at(self._counts[dim], bins, 1)
-            np.minimum.at(self._minima[dim], bins, values)
-            np.maximum.at(self._maxima[dim], bins, values)
-
-    def quantiles(self, keys: list[str]) -> dict[str, list[float]]:
-        result: dict[str, list[float]] = {k: [] for k in keys}
-        probabilities = np.array([int(k[1:]) / 100 for k in keys])
-        for counts, minima, maxima in zip(self._counts, self._minima, self._maxima, strict=True):
-            cumulative = counts.cumsum()
-            ranks = (cumulative[-1] - 1) * probabilities
-            indices = np.stack([np.floor(ranks), np.ceil(ranks)]).astype(int)
-            bins = np.searchsorted(cumulative, indices, side="right")
-            offset = indices - (cumulative[bins] - counts[bins])
-            share = offset / np.maximum(1, counts[bins] - 1)
-            low, high = minima[bins], maxima[bins]
-            values = low + (high - low) * share
-            estimates = values[0] + (values[1] - values[0]) * (ranks - indices[0])
-            for key, estimate in zip(keys, estimates, strict=True):
-                result[key].append(float(estimate))
-        return result
 
 
 def _timestamp_values(df: pd.DataFrame, fps: float) -> tuple[np.ndarray, np.ndarray]:

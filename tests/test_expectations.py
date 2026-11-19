@@ -104,6 +104,17 @@ def test_v3_episode_must_live_in_its_declared_shard(tmp_path: Path) -> None:
         assert result.status == Status.FAIL
         assert "missing rows" in result.message
 
+    # Both episode pointers are now correct, but the reader concatenates the
+    # shards in filename order and would still address the wrong episodes.
+    frames[frames["episode_index"] != 0].to_parquet(shard, index=False)
+    frames[frames["episode_index"] == 0].to_parquet(
+        shard.with_name("file-001.parquet"), index=False
+    )
+    snap = load_snapshot(ds, max_episodes=1)
+    result = next(r for r in run_all(snap) if r.name == "episode_files")
+    assert result.status == Status.FAIL
+    assert "episode order across data shards" in result.message
+
 
 def test_frame_mismatch_is_caught(tmp_path: Path) -> None:
     assert statuses(make_fixture(tmp_path, "frame-mismatch"))["total_frames"] == Status.FAIL
@@ -511,6 +522,26 @@ def test_clean_fixture_index_column_passes(tmp_path: Path) -> None:
         snap = load_snapshot(make_fixture(tmp_path / fmt, None, fmt))
         r = check_index_column(snap)
         assert r.status == Status.PASS, (fmt, r.message)
+
+
+def test_v3_complete_episodes_in_wrong_physical_order_fail(tmp_path: Path) -> None:
+    from tailor.expectations import check_episode_files
+
+    ds = make_fixture(tmp_path, "reordered-episodes", "v3.0")
+    snap = load_snapshot(ds, max_episodes=1)
+    result = check_episode_files(snap)
+    assert result.status == Status.FAIL, result.message
+    assert "episode order" in result.message
+
+
+def test_v3_overlapping_window_fails_even_with_metadata_only(tmp_path: Path) -> None:
+    from tailor.expectations import check_index_column
+
+    ds = make_fixture(tmp_path, "overlapping-window", "v3.0")
+    for metadata_only in (False, True):
+        result = check_index_column(load_snapshot(ds, metadata_only=metadata_only))
+        assert result.status == Status.FAIL, result.message
+        assert result.details["problems"] == [(0, "declared window [0,40) must equal [0,20)")]
 
 
 def test_stats_drift_severity_tracks_coverage(tmp_path: Path) -> None:

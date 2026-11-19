@@ -70,6 +70,46 @@ def test_rebuild_is_idempotent(tmp_path: Path) -> None:
     assert files2 == [] and rows2 == 0
 
 
+def test_cross_shard_quantiles_are_exact_with_outliers(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from tailor.cli import app
+
+    ds = make_fixture(tmp_path, fmt="v2.1", frames=100)
+    # The extremes pull the histogram bins so wide that its interpolation
+    # mistakes normal action values for values close to the first outlier.
+    action = np.column_stack(
+        (
+            np.r_[np.linspace(0, 0.5, 298), 100.0, 1e6],
+            np.linspace(3, 4, 300)[:, None] * np.arange(5),
+        )
+    )
+    for idx, shard in enumerate(sorted((ds / "data").rglob("*.parquet"))):
+        data = pd.read_parquet(shard)
+        data["action"] = list(action[idx * 100 : (idx + 1) * 100])
+        data.to_parquet(shard, index=False)
+    stats = ds / "meta/stats.json"
+    previous = json.loads(stats.read_text())
+    expected = np.quantile(action, [0.01, 0.99], axis=0)
+    previous["action"].update(q01=expected[0].tolist(), q99=expected[1].tolist())
+    stats.write_text(json.dumps(previous))
+
+    apply_clean(load_snapshot(ds), stats=True, timestamps=False)
+
+    current = json.loads(stats.read_text())
+    actual = current["action"]
+    assert actual["q01"] == pytest.approx(expected[0])
+    assert actual["q99"] == pytest.approx(expected[1])
+
+    actual["q99"][0] = 99.0
+    drifted = json.dumps(current)
+    stats.write_text(drifted)
+    result = CliRunner().invoke(app, ["clean", str(ds), "--no-timestamps"])
+    assert result.exit_code == 0, result.output
+    assert "action.q99" in result.stdout
+    assert stats.read_text() == drifted
+
+
 def test_clean_cli_dry_run_writes_nothing(tmp_path: Path) -> None:
     from typer.testing import CliRunner
 

@@ -134,6 +134,7 @@ def check_episode_files(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
         # v3 stores episodes back-to-back in chunk/file shards; episode meta
         # carries the shard pointer, so existence is checked per shard.
         referenced: set[Path] = set()
+        shards_by_episode: list[tuple[int, Path]] = []
         missing_shards = set()
         for ep in snap.episodes:
             shard = _v3_episode_shard(snap.root, ep)
@@ -141,6 +142,9 @@ def check_episode_files(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
                 missing_shards.add("unresolved shard pointer")
                 continue
             referenced.add(shard)
+            idx = ep.get("episode_index")
+            if isinstance(idx, int):
+                shards_by_episode.append((idx, shard))
             if not shard.is_file():
                 missing_shards.add(str(shard.relative_to(snap.root)))
         if missing_shards:
@@ -160,6 +164,15 @@ def check_episode_files(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
                 f"{len(orphans)} data shard(s) on disk not referenced by any episode",
                 orphans=orphans[:20],
             )
+        shards_by_episode.sort()
+        for (_, previous), (idx, current) in pairwise(shards_by_episode):
+            if current < previous:
+                return _fail(
+                    "episode_files",
+                    f"episode order across data shards is incorrect at episode {idx}",
+                    previous_shard=str(previous.relative_to(snap.root)),
+                    current_shard=str(current.relative_to(snap.root)),
+                )
         return _ok("episode_files")
     missing = [
         ep.get("episode_index")
@@ -1373,18 +1386,23 @@ def check_index_column(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckR
     disagrees with episode_offset + frame_index (order-independent, compared
     per row) means a rewrite/concatenation accident — every consumer trusting
     `index` as time order is silently wrong. Offset accumulates *declared*
-    lengths, so the verdict holds under --max-episodes sampling.
+    lengths, so the verdict holds under --max-episodes sampling. These lengths
+    also define the exact v3 windows, independently of which frames are loaded.
     """
     cfg = cfg or {}
-    if not snap.frames:
-        return _skip("index_column", "no readable frames")
     if not snap.episodes:
         return _skip("index_column", "episode metadata unreadable")
-    has_cols = all(
+    v3 = (snap.info or {}).get("codebase_version") == "v3.0"
+    has_cols = bool(snap.frames) and all(
         "index" in df.columns and "frame_index" in df.columns for df in snap.frames.values()
     )
-    if not has_cols:
-        return _skip("index_column", "index/frame_index column absent from sampled frames")
+    no_rows = (
+        "index/frame_index column absent from sampled frames"
+        if snap.frames
+        else "no readable frames"
+    )
+    if not v3 and not has_cols:
+        return _skip("index_column", no_rows)
 
     def ep_len(ep: dict) -> int | None:
         if ep.get("length") is not None:
@@ -1395,7 +1413,8 @@ def check_index_column(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckR
         loaded = snap.frames.get(raw_idx)
         return len(loaded) if loaded is not None else None
 
-    problems = []
+    window_problems: list[tuple[int, str]] = []
+    row_problems: list[tuple[int, str]] = []
     checked = 0
     offset = 0
     for ep in sorted(snap.episodes, key=lambda e: e.get("episode_index", -1)):
@@ -1407,43 +1426,47 @@ def check_index_column(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckR
         if ln is None:
             # offset chain broken: later episodes have no trustworthy anchor
             break
+        if v3:
+            start, stop = ep.get("dataset_from_index"), ep.get("dataset_to_index")
+            if (
+                type(start) is not int
+                or type(stop) is not int
+                or (start, stop) != (offset, offset + ln)
+            ):
+                window_problems.append(
+                    (idx, f"declared window [{start},{stop}) must equal [{offset},{offset + ln})")
+                )
         df = snap.frames.get(idx)
-        if df is not None and "index" in df.columns and "frame_index" in df.columns and len(df):
+        if has_cols and df is not None and len(df):
             expected = offset + np.asarray(df["frame_index"])
             actual = np.asarray(df["index"])
             checked += len(df)
             bad = int((actual != expected).sum())
             if bad:
                 first = int(np.flatnonzero(actual != expected)[0])
-                problems.append(
+                row_problems.append(
                     (
                         idx,
                         f"{bad}/{len(df)} rows ({bad / len(df):.1%}) index != "
                         f"episode_offset + frame_index (first at row {first})",
                     )
                 )
-            # v3.0 only: rows must also sit inside the declared global window
-            f_from, f_to = ep.get("dataset_from_index"), ep.get("dataset_to_index")
-            if (
-                f_from is not None
-                and f_to is not None
-                and (expected.min() < f_from or expected.max() >= f_to)
-            ):
-                problems.append(
-                    (
-                        idx,
-                        f"expected range [{int(expected.min())},{int(expected.max())}] outside "
-                        f"declared [{f_from},{f_to})",
-                    )
-                )
         offset += ln
-    if problems:
+    if window_problems or row_problems:
+        problems = window_problems + row_problems
+        descriptions = []
+        if window_problems:
+            descriptions.append(f"{len(window_problems)} invalid episode window(s)")
+        if row_problems:
+            descriptions.append(f"{len(row_problems)} episode(s) with mislabeled index column")
         return _fail(
             "index_column",
-            f"{len(problems)} episode(s) with mislabeled index column",
+            "; ".join(descriptions),
             problems=problems[:10],
-            episodes=sorted({p[0] for p in problems if isinstance(p[0], int)}),
+            episodes=sorted({idx for idx, _ in row_problems}),
         )
+    if not has_cols:
+        return _skip("index_column", no_rows)
     if checked == 0:
         return _skip("index_column", "no anchored episodes to check")
     return _ok("index_column", f"{checked} sampled rows match episode_offset + frame_index")

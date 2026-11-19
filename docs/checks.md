@@ -58,11 +58,12 @@ exist. Gate for anyone who trains and evaluates from one artifact.
 ## Data columns (parquet)
 
 **`episode_files`** checks that all referenced Parquet files exist and that
-files loaded for the selected episodes are readable. For v3, each selected
-episode must have rows in its declared shard (`data/chunk_index` and
-`data/file_index`), and every shard on disk must have a reference. Remote
-metadata-only runs skip these checks. Reproduce with `--corrupt missing-file`,
-`--corrupt unreadable-parquet`, or `--corrupt orphan-shard`.
+files loaded for the selected episodes are readable. In v3, each loaded shard
+must contain exactly its declared episodes in episode-index order. Shards
+must follow the same order when read by path, and every shard on disk must
+have a reference. Remote metadata-only runs skip these checks. Reproduce with
+`--corrupt missing-file`, `--corrupt unreadable-parquet`, `--corrupt orphan-shard`,
+or `--corrupt reordered-episodes`.
 
 **`state_action_dims`** — vector dims of `observation.state` / `action`
 match the declared feature shapes.
@@ -104,11 +105,13 @@ frame identity), `holes` (values genuinely missing). Reproduce: `--corrupt
 dropped-frames`, `--corrupt reordered-rows`.
 
 **`index_column`** — every row satisfies `index == episode_offset +
-frame_index` (order-free, per row), and v3.0 rows sit inside their declared
-`[dataset_from_index, dataset_to_index)` window. Catches rewrite/concat
-accidents that mislabel the global row identity while leaving frame_index
+frame_index` (order-free, per row). Each v3 episode's declared window
+`[dataset_from_index, dataset_to_index)` must equal
+`[episode_offset, episode_offset + length)`, including in metadata-only runs.
+This catches rewrite/concat accidents that mislabel global row identity while leaving frame_index
 and timestamps untouched. Offsets accumulate declared lengths, so the verdict
-holds under `--max-episodes`. Reproduce: `--corrupt index-mislabel`.
+holds under `--max-episodes`. Reproduce with `--corrupt index-mislabel` or
+`--corrupt overlapping-window`.
 
 **`duplicate_episodes`** — no byte-identical state/action pairs across
 episodes (WARN; says which episodes pair up). Reproduce: `--corrupt

@@ -178,6 +178,12 @@ def _load_v3_frames(snap: DatasetSnapshot, episodes: list[dict]) -> None:
         idx = ep.get("episode_index")
         if path is not None and isinstance(idx, int):
             wanted_by_shard.setdefault(path, set()).add(idx)
+    declared_by_shard: dict[Path, set[int]] = {path: set() for path in wanted_by_shard}
+    for ep in snap.episodes or []:
+        path = _v3_episode_shard(snap.root, ep)
+        idx = ep.get("episode_index")
+        if path is not None and path in declared_by_shard and isinstance(idx, int):
+            declared_by_shard[path].add(idx)
     for path, wanted in sorted(wanted_by_shard.items()):
         if not path.is_file():
             continue  # the file-existence check names missing shards
@@ -190,16 +196,24 @@ def _load_v3_frames(snap: DatasetSnapshot, episodes: list[dict]) -> None:
         if "episode_index" not in df.columns:
             snap.frame_errors[relative] = "episode_index column missing"
             continue
-        if not pd.api.types.is_integer_dtype(df["episode_index"]):
+        episode_indices = df["episode_index"]
+        if not pd.api.types.is_integer_dtype(episode_indices) or episode_indices.hasnans:
             snap.frame_errors[relative] = "episode_index column must contain integers"
             continue
-        found = set()
+        found = set(episode_indices.unique())
+        declared = declared_by_shard[path]
+        if missing := sorted(declared - found):
+            snap.frame_errors[relative] = (
+                f"missing rows for {len(missing)} declared episode(s): {missing[:10]}"
+            )
+        elif extra := sorted(found - declared):
+            snap.frame_errors[relative] = (
+                f"rows for {len(extra)} episode(s) not declared in this shard: {extra[:10]}"
+            )
+        elif not episode_indices.is_monotonic_increasing:
+            snap.frame_errors[relative] = "episode order in Parquet does not match metadata"
+
         for key, rows in df.groupby("episode_index"):
             if key in wanted:
                 idx = int(cast("int", key))
                 snap.frames[idx] = rows
-                found.add(idx)
-        if missing := sorted(wanted - found):
-            snap.frame_errors[relative] = (
-                f"missing rows for {len(missing)} declared episode(s): {missing[:10]}"
-            )

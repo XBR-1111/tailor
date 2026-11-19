@@ -185,7 +185,6 @@ def filter_(
         )
         raise typer.Exit(code=2)
 
-    explicit = parse_episode_list(drop_episodes) if drop_episodes else None
     prof = None
     if profile is not None:
         from tailor.profile import ProfileError, load_profile
@@ -199,14 +198,19 @@ def filter_(
     if from_check:
         results = run_all(snap, profile=prof)
 
-    decision = collect_drops(
-        snap,
-        explicit=explicit,
-        min_length=min_length,
-        dedupe=dedupe,
-        from_check=results,
-        drop_warn=drop_warn,
-    )
+    try:
+        explicit = parse_episode_list(drop_episodes) if drop_episodes else None
+        decision = collect_drops(
+            snap,
+            explicit=explicit,
+            min_length=min_length,
+            dedupe=dedupe,
+            from_check=results,
+            drop_warn=drop_warn,
+        )
+    except ValueError as e:
+        err_console.print(f"[red]cannot plan filter:[/red] {e}")
+        raise typer.Exit(code=2) from e
     console.print(render_decision(decision, len(snap.episodes or [])))
     if not decision.n_drop:
         if results and any(r.status == Status.FAIL for r in results):
@@ -214,6 +218,9 @@ def filter_(
             raise typer.Exit(code=1)
         console.print("[green]nothing to drop — dataset unchanged[/green]")
         raise typer.Exit(code=0)
+    if not decision.keep:
+        err_console.print("[red]filter would remove every episode[/red]")
+        raise typer.Exit(code=1)
 
     try:
         from lerobot.datasets.dataset_tools import delete_episodes as _del

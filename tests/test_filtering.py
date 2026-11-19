@@ -2,9 +2,17 @@
 
 from pathlib import Path
 
-from tailor.expectations import run_all
+import pandas as pd
+import pytest
+import yaml
+from typer.testing import CliRunner
+
+from tailor.cli import app
+from tailor.expectations import check_duplicate_episodes, check_timestamps, run_all
 from tailor.filtering import collect_drops, parse_episode_list, render_decision
 from tailor.loader import load_snapshot
+from tailor.model import DatasetSnapshot
+from tailor.profile import load_profile
 from test_expectations import make_fixture
 
 
@@ -14,8 +22,6 @@ def test_parse_episode_list() -> None:
 
 
 def test_parse_rejects_junk() -> None:
-    import pytest
-
     with pytest.raises(ValueError, match="invalid episode"):
         parse_episode_list("1,two,3")
 
@@ -67,14 +73,88 @@ def test_from_check_drops_episode_with_nonfinite_features(tmp_path: Path) -> Non
 
 
 def test_from_check_returns_failure_if_findings_cannot_be_filtered(tmp_path: Path) -> None:
-    from typer.testing import CliRunner
-
-    from tailor.cli import app
-
     ds = make_fixture(tmp_path, "frame-mismatch", fmt="v3.0")
     result = CliRunner().invoke(app, ["filter", str(ds), "--from-check"])
     assert result.exit_code == 1, result.output
     assert "REJECTED" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("name", "rule", "length", "examples", "limit"),
+    [
+        ("episode_lengths", {"min": 100, "severity": "fail"}, 50, "short", 20),
+        ("episode_lengths", {}, 0, "bad", 20),
+        ("training_readiness", {"chunk_size": 100}, 50, "too_short", 10),
+    ],
+)
+def test_yaml_filters_all_episodes_identified_by_length_rules(
+    tmp_path: Path, name: str, rule: dict, length: int, examples: str, limit: int
+) -> None:
+    episodes = [{"episode_index": i, "length": length} for i in range(25)]
+    episodes.append({"episode_index": 25, "length": 150})
+    snap = DatasetSnapshot(root=tmp_path, episodes=episodes, metadata_only=True)
+    profile = tmp_path / "profile.yaml"
+    profile.write_text(yaml.safe_dump({"checks": {name: rule}}))
+
+    result = next(r for r in run_all(snap, load_profile(profile)) if r.name == name)
+    decision = collect_drops(snap, from_check=[result])
+
+    assert result.details[examples] == list(range(limit))
+    assert result.details["episodes"] == list(range(25))
+    assert set(decision.drop) == set(range(25))
+    assert decision.keep == {25}
+
+
+def test_from_check_uses_complete_duplicate_group(tmp_path: Path) -> None:
+    frames = pd.DataFrame({"action": [[0.0], [1.0]]})
+    snap = DatasetSnapshot(
+        root=tmp_path,
+        episodes=[{"episode_index": i} for i in range(53)],
+        frames=dict.fromkeys(range(53), frames),
+    )
+    decision = collect_drops(snap, from_check=[check_duplicate_episodes(snap)], drop_warn=True)
+    assert set(decision.drop) == set(range(1, 53))
+    assert decision.keep == {0}
+
+
+def test_from_check_uses_complete_timestamp_warnings(tmp_path: Path) -> None:
+    irregular = pd.DataFrame({"timestamp": [0.0, 0.2]})
+    regular = pd.DataFrame({"timestamp": [0.0, 0.1]})
+    snap = DatasetSnapshot(
+        root=tmp_path,
+        info={"fps": 10},
+        episodes=[{"episode_index": i} for i in range(13)],
+        frames={**dict.fromkeys(range(12), irregular), 12: regular},
+    )
+    decision = collect_drops(snap, from_check=[check_timestamps(snap)], drop_warn=True)
+    assert set(decision.drop) == set(range(12))
+    assert decision.keep == {12}
+
+
+def test_filter_refuses_to_write_when_rules_drop_every_episode(tmp_path: Path) -> None:
+    ds = make_fixture(tmp_path, fmt="v3.0")
+    profile = tmp_path / "profile.yaml"
+    profile.write_text("checks:\n  episode_lengths: {min: 21, severity: fail}\n")
+    dest = tmp_path / "filtered"
+
+    result = CliRunner().invoke(
+        app, ["filter", str(ds), "--from-check", "-p", str(profile), "-o", str(dest)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "would remove every episode" in result.stderr
+    assert not dest.exists()
+
+
+def test_filter_rejects_an_unknown_explicit_id_before_rewriting(tmp_path: Path) -> None:
+    ds = make_fixture(tmp_path, fmt="v3.0")
+    dest = tmp_path / "filtered"
+
+    result = CliRunner().invoke(app, ["filter", str(ds), "--drop-episodes", "999", "-o", str(dest)])
+
+    assert result.exit_code == 2, result.output
+    assert "unknown episode indices: 999" in result.stderr
+    assert not dest.exists()
 
 
 def test_render_decision_lists_reasons(tmp_path: Path) -> None:
@@ -85,7 +165,5 @@ def test_render_decision_lists_reasons(tmp_path: Path) -> None:
 
 
 def test_parse_episode_list_rejects_negative() -> None:
-    import pytest
-
     with pytest.raises(ValueError):
         parse_episode_list("3,-7,12")

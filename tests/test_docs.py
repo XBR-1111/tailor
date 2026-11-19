@@ -11,9 +11,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tailor.expectations import EXPECTATIONS, run_all
 from tailor.loader import load_snapshot
-from tailor.profile import DEFAULTS
+from tailor.profile import DEFAULTS, load_profile
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
@@ -45,6 +47,20 @@ def test_configuration_doc_lists_every_tunable() -> None:
         "undocumented": sorted(expected - documented),
         "stale": sorted(documented - expected),
     }
+
+
+@pytest.mark.parametrize("doc", ["docs/configuration.md", "README.md", "README.zh-CN.md"])
+def test_documented_acceptance_profiles_load(doc: str, tmp_path: Path) -> None:
+    md = (ROOT / doc).read_text()
+    profiles = re.findall(r"^```(?:yaml|yml)[ \t]*\n(.*?)^```[ \t]*$", md, re.M | re.S)
+    if doc.startswith("README"):
+        # The READMEs also show a GitHub Actions workflow, which is not a profile.
+        profiles = [example for example in profiles if example.startswith("# my_requirements.yaml")]
+    assert profiles, f"no YAML profile examples in {doc}"
+    for index, example in enumerate(profiles, start=1):
+        path = tmp_path / f"profile-{index}.yaml"
+        path.write_text(example)
+        load_profile(path)
 
 
 def test_checks_doc_covers_every_check() -> None:

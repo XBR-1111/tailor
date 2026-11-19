@@ -11,7 +11,7 @@ label"): format compliance, metadata-vs-data consistency, integrity.
 import json
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -55,6 +55,10 @@ def _warn(name: str, message: str, **details: Any) -> CheckResult:
 
 def _skip(name: str, message: str) -> CheckResult:
     return CheckResult(name, Status.SKIP, message)
+
+
+def _episode_ids(indices: Iterable[object]) -> list[int]:
+    return sorted({idx for idx in indices if type(idx) is int and idx >= 0})
 
 
 def check_info_json(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
@@ -197,7 +201,7 @@ def check_episode_lengths(snap: DatasetSnapshot, cfg: dict | None = None) -> Che
             "episode_lengths",
             f"{len(bad)} episode(s) with length<=0",
             bad=bad[:20],
-            episodes=bad[:20],
+            episodes=_episode_ids(bad),
         )
     minimum = cfg.get("min", 2)
     short = [ep.get("episode_index") for ep in snap.episodes if 0 < ep.get("length", 0) < minimum]
@@ -206,7 +210,7 @@ def check_episode_lengths(snap: DatasetSnapshot, cfg: dict | None = None) -> Che
             "episode_lengths",
             f"{len(short)} very short episode(s) (<{minimum} frames) will break chunked sampling",
             short=short[:20],
-            episodes=short[:20],
+            episodes=_episode_ids(short),
         )
     return _ok("episode_lengths")
 
@@ -370,7 +374,7 @@ def check_timestamps(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRes
             "timestamps",
             f"{len(spacing_warns)} episode(s) with frame spacing deviating"
             f" >{tolerance:.0%} from 1/fps",
-            episodes=spacing_warns[:10],
+            episodes=spacing_warns,
         )
     return _ok("timestamps")
 
@@ -790,6 +794,7 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     jobs = _video_probe_jobs(snap, keys)
 
     problems: list[str] = []
+    out_of_range_episodes: set[int] = set()
     import os
     from concurrent.futures import ThreadPoolExecutor
 
@@ -816,11 +821,14 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
             for ep in episodes:
                 span = _video_span(ep, key)
                 if span is not None and (span[0] >= timeline_end or span[1] > timeline_end + slack):
+                    idx = ep.get("episode_index")
                     problems.append(
-                        f"{key} {label} ep {ep.get('episode_index')}: "
+                        f"{key} {label} ep {idx}: "
                         f"video span [{span[0]:g}, {span[1]:g})s outside "
                         f"stream duration {timeline_end:g}s"
                     )
+                    if type(idx) is int and idx >= 0:
+                        out_of_range_episodes.add(idx)
         if len(shape) >= 2 and (h, w) != (shape[0], shape[1]):
             problems.append(f"{key} {label}: {w}x{h} vs declared {shape[1]}x{shape[0]}")
         # declared fps (info.json features) vs container fps: a silent unit
@@ -845,7 +853,11 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
         if interlaced:
             problems.append(f"{key} {label}: interlaced stream (loaders assume progressive)")
     if problems:
-        return _fail("video_streams", f"{len(problems)} stream problem(s)", problems=problems[:10])
+        details: dict[str, Any] = {"problems": problems[:10]}
+        # A container-wide error alone cannot identify which episodes to remove.
+        if out_of_range_episodes:
+            details["episodes"] = sorted(out_of_range_episodes)
+        return _fail("video_streams", f"{len(problems)} stream problem(s)", **details)
     return _ok("video_streams", f"{len(keys)} stream(s) probed")
 
 
@@ -1459,6 +1471,7 @@ def check_training_readiness(snap: DatasetSnapshot, cfg: dict | None = None) -> 
             "ACT/diffusion sampling would crash or pad",
             too_short=too_short[:10],
             min_length=min_len,
+            episodes=_episode_ids(too_short),
         )
     return _ok("training_readiness", f"min episode length {min_len} > chunk_size {chunk_size}")
 
@@ -1523,7 +1536,7 @@ def check_duplicate_episodes(snap: DatasetSnapshot, cfg: dict | None = None) -> 
             "duplicate_episodes",
             f"{len(dupes)} group(s) of byte-identical state/action trajectories",
             groups=pairs,
-            episodes=drop_later[:50],
+            episodes=drop_later,
         )
     return _ok("duplicate_episodes")
 

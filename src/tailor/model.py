@@ -17,7 +17,12 @@ class Status(StrEnum):
 
 @dataclass
 class CheckResult:
-    """Outcome of one expectation against one dataset snapshot."""
+    """Outcome of one expectation against one dataset snapshot.
+
+    When a finding can be resolved by dropping specific episodes,
+    `details["episodes"]` carries the full list of their IDs for filtering.
+    Human-readable examples can be limited independently.
+    """
 
     name: str
     status: Status

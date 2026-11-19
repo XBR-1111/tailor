@@ -77,12 +77,13 @@ tailor filter PATH [-o OUT] [--drop-episodes 3,17,23] [--min-length N]
 | `--dedupe` | drop later members of byte-identical duplicate groups |
 | `--from-check` | run the suite first and drop episodes that FAIL checks pin to an episode |
 | `--drop-warn` | with `--from-check`: WARN-pinned episodes too |
-| `-p, --profile` | acceptance profile for `--from-check` |
+| `-p, --profile` | acceptance profile for `--from-check` and for the output recheck |
 
 Rewrites via lerobot's official `delete_episodes` engine, so parquet, videos,
 stats and metadata are rebuilt consistently. The output is re-checked
 automatically and the verdict printed. Every drop is printed with its reason.
-The command exits **1** if the acceptance verdict is rejected.
+The command exits **1** if the acceptance verdict is rejected or the rules
+select every episode for removal. An unknown explicit episode index exits **2**.
 Requires `pip install 'lerobot-tailor[lerobot]'`; v3.0 datasets only.
 
 ## clean

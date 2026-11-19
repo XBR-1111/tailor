@@ -57,8 +57,8 @@ nothing to `tailor filter --from-check`.
 
 ## Tunables, per check
 
-Only the checks below have tunable parameters. Every other check
-(25 total, see [checks.md](checks.md)) accepts just `severity` and `enabled`.
+Only the checks below have tunable parameters. The other checks accept
+`severity` and `enabled`. See the [full list of checks](checks.md).
 
 ### Structure and metadata
 
@@ -104,7 +104,7 @@ Only the checks below have tunable parameters. Every other check
 
 | check | key | default | meaning | when to change |
 | --- | --- | --- | --- | --- |
-| `training_readiness` | `chunk_size` | `null` (off) | episodes shorter than `chunk_size × horizon` fail | set to your policy's action chunk length; this check stays SKIP until you do |
+| `training_readiness` | `chunk_size` | `null` (off) | episodes with at most `chunk_size` frames fail | set to your policy's action chunk length to enable the check |
 
 `video_content` has one subtlety: the built-in default carries
 `enabled: false`, and your profile merges on top of it — so an empty entry
@@ -113,19 +113,21 @@ Only the checks below have tunable parameters. Every other check
 
 ## Recipes
 
-**Strict delivery gate** — pin the format, long episodes, deep video scan,
-promote warnings to failures:
+**Strict delivery gate** requires v3.0 and at least 100 frames per episode.
+It enables the deep video scan and treats camera drift and duplicates as
+failures.
 
 ```yaml
 checks:
   codebase_version: {allowed: [v3.0]}
-  episode_lengths: {min: 100}
-  video_content: {enabled: true, blur_rel: 0.2}
+  episode_lengths: {min: 100, severity: fail}
+  video_content: {enabled: true}
   video_sync: {tolerance: 0.02, severity: fail}
   duplicate_episodes: {severity: fail}
 ```
 
-**Fast per-commit CI** — metadata-only, warnings tolerated:
+**Fast per-commit CI** — skip full video decoding and fail on action-quality
+or portability warnings when those checks can run:
 
 ```yaml
 checks:

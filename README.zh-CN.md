@@ -83,6 +83,10 @@ tailor filter /data/ds --dedupe                # 逐字节相同的轨迹，保�
 需要 `pip install 'lerobot-tailor[lerobot]'`（验收本体保持零重依赖）。当前支持 v3.0。
 每次剔除都打印原因——不做静默删除。
 
+`--from-check` 使用检查项定位到的完整 episode 名单，报告只展示部分示例。共享视频
+分片内，超出文件时长的区间可以定位到具体 episode。如果规则选中了全部 episode，
+命令会在写出结果前报错退出。
+
 ## Clean——确定性修复
 
 `tailor clean` 按 `frame_index / fps` 修复时间戳，再用修复后的 Parquet 值重算

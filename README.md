@@ -90,6 +90,11 @@ Requires `pip install 'lerobot-tailor[lerobot]'` (the acceptance suite itself st
 dependency-free). Currently v3.0 datasets. Every drop is printed with its
 reason — no silent removals.
 
+`--from-check` uses every identified episode, including those beyond the
+report's examples. Video spans that exceed a shared shard identify specific
+episodes for removal. If the rules select every episode, the command exits
+with an error before writing an output.
+
 ## Clean — deterministic repairs
 
 `tailor clean` rebuilds timestamps as `frame_index / fps` and recomputes

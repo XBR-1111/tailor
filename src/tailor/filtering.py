@@ -51,6 +51,9 @@ def collect_drops(
         decision.drop.setdefault(idx, []).append(reason)
 
     if explicit:
+        unknown = explicit - decision.keep
+        if unknown:
+            raise ValueError(f"unknown episode indices: {', '.join(map(str, sorted(unknown)))}")
         for idx in sorted(explicit):
             _drop(idx, "explicit --drop-episodes")
     if min_length is not None:
@@ -78,9 +81,9 @@ def collect_drops(
         for r in from_check:
             if r.status not in trigger:
                 continue
-            eps = r.details.get("episodes") or []
-            for idx in eps:
-                _drop(idx, f"{r.name} ({r.status.value})")
+            for idx in r.details.get("episodes") or []:
+                if type(idx) is int and idx in decision.keep:
+                    _drop(idx, f"{r.name} ({r.status.value})")
     decision.keep -= set(decision.drop)
     return decision
 

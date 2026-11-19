@@ -79,6 +79,7 @@ result is **re-checked automatically**; its verdict is printed.
 tailor filter /data/ds --drop-episodes 5,17,23 -o /data/ds_clean
 
 # drop everything FAIL-level checks can pin to an episode (--drop-warn adds WARN)
+tailor filter /data/ds --from-check --dry-run --json
 tailor filter /data/ds --from-check --drop-warn
 
 # rule-based
@@ -89,6 +90,9 @@ tailor filter /data/ds --dedupe                # byte-identical trajectories, ke
 Requires `pip install 'lerobot-tailor[lerobot]'` (the acceptance suite itself stays
 dependency-free). Currently v3.0 datasets. Every drop is printed with its
 reason — no silent removals.
+
+Use `--dry-run` to inspect the full plan before writing an output. Add `--json`
+to save the plan or consume it in CI. Previewing works without the LeRobot extra.
 
 `--from-check` uses every identified episode, including those beyond the
 report's examples. Video spans that exceed a shared shard identify specific

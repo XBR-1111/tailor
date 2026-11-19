@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] — 2026-11-19
+
+### Added
+- `tailor filter --dry-run` shows what will be kept and dropped before the
+  optional LeRobot writer runs. Add `--json` for a versioned plan with
+  full episode lists, per-episode reasons, and failures without an episode ID.
+
+### Changed
+- Combined rules preserve the first eligible duplicate after other removals
+  are planned.
+
 ## [0.12.0] — 2026-11-11
 
 ### Added

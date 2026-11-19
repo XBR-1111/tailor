@@ -159,27 +159,32 @@ def filter_(
     profile: Path | None = typer.Option(
         None, "--profile", "-p", help="YAML acceptance profile for --from-check."
     ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview the plan without writing data."),
+    json_output: bool = typer.Option(False, "--json", help="Print the dry-run plan as JSON."),
 ) -> None:
     """Filter episodes out of a dataset into a new dataset (the Cut stage).
 
-    Requires the lerobot extra: pip install "tailor[lerobot]".
+    Applying a plan requires `pip install "lerobot-tailor[lerobot]"`.
     The output is re-checked after the rewrite; its verdict is printed.
     """
+    if json_output and not dry_run:
+        err_console.print("[red]filter --json requires --dry-run[/red]")
+        raise typer.Exit(code=2)
     if not any([drop_episodes, min_length is not None, dedupe, from_check]):
-        console.print(
+        err_console.print(
             "[red]no filter rule given[/red] "
             "(see --drop-episodes / --min-length / --dedupe / --from-check)"
         )
         raise typer.Exit(code=2)
-    from tailor.filtering import collect_drops, parse_episode_list, render_decision
+    from tailor.filtering import FilterPlan, collect_drops, parse_episode_list, render_decision
 
     snap = load_snapshot(path)
     if not snap.readable:
-        console.print("[red]dataset unreadable[/red]")
+        err_console.print("[red]dataset unreadable[/red]")
         raise typer.Exit(code=2)
     version = (snap.info or {}).get("codebase_version")
     if version != "v3.0":
-        console.print(
+        err_console.print(
             f"[red]filter currently supports v3.0 datasets (this is {version});[/red] "
             "convert first (lerobot's conversion scripts) or wait for v2 support"
         )
@@ -192,7 +197,7 @@ def filter_(
         try:
             prof = load_profile(profile)
         except ProfileError as e:
-            console.print(f"[red]invalid profile:[/red] {e}")
+            err_console.print(f"[red]invalid profile:[/red] {e}")
             raise typer.Exit(code=2) from e
     results = None
     if from_check:
@@ -211,25 +216,33 @@ def filter_(
     except ValueError as e:
         err_console.print(f"[red]cannot plan filter:[/red] {e}")
         raise typer.Exit(code=2) from e
-    console.print(render_decision(decision, len(snap.episodes or [])))
+    plan = FilterPlan(decision, results)
+    out = output or path.parent / f"{path.name}_filtered"
+    if json_output:
+        typer.echo(json.dumps(plan.as_dict(path, out), indent=2, ensure_ascii=False))
+    else:
+        console.print(render_decision(decision, len(snap.episodes or [])))
+        if plan.blockers and (dry_run or not decision.n_drop):
+            render_terminal(plan.blockers, str(path))
+        if plan.error:
+            err_console.print(f"[red]{plan.error}[/red]")
+        elif dry_run:
+            console.print("[bold]dry-run — nothing written[/bold]")
+    if plan.error:
+        raise typer.Exit(code=1)
+    if dry_run:
+        raise typer.Exit(code=0)
     if not decision.n_drop:
-        if results and any(r.status == Status.FAIL for r in results):
-            render_terminal(results, str(path))
-            raise typer.Exit(code=1)
         console.print("[green]nothing to drop — dataset unchanged[/green]")
         raise typer.Exit(code=0)
-    if not decision.keep:
-        err_console.print("[red]filter would remove every episode[/red]")
-        raise typer.Exit(code=1)
 
     try:
         from lerobot.datasets.dataset_tools import delete_episodes as _del
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
     except ImportError:
-        console.print("[red]lerobot not installed:[/red] pip install 'tailor[lerobot]'")
+        err_console.print("[red]lerobot not installed:[/red] pip install 'lerobot-tailor[lerobot]'")
         raise typer.Exit(code=2) from None
 
-    out = output or path.parent / f"{path.name}_filtered"
     if out.exists():
         console.print(f"[red]output exists:[/red] {out}")
         raise typer.Exit(code=2)

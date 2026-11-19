@@ -5,7 +5,9 @@ drop set with per-episode reasons. The actual dataset rewrite lives in the CLI
 layer behind the [lerobot] extra so the acceptance core stays dependency-free.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
 from tailor.model import CheckResult, DatasetSnapshot, Status
 
@@ -18,6 +20,42 @@ class DropDecision:
     @property
     def n_drop(self) -> int:
         return len(self.drop)
+
+
+@dataclass
+class FilterPlan:
+    decision: DropDecision
+    findings: list[CheckResult] | None = None
+
+    @property
+    def blockers(self) -> list[CheckResult]:
+        return [
+            result
+            for result in self.findings or []
+            if result.status == Status.FAIL and not result.details.get("episodes")
+        ]
+
+    @property
+    def error(self) -> str | None:
+        if self.decision.n_drop and not self.decision.keep:
+            return "filter would remove every episode"
+        if not self.decision.n_drop and any(r.status == Status.FAIL for r in self.findings or []):
+            return "source rejected and no episodes selected for removal"
+        return None
+
+    def as_dict(self, source: Path, output: Path) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "dataset": str(source),
+            "output": str(output),
+            "keep": sorted(self.decision.keep),
+            "drop": [
+                {"episode_index": index, "reasons": self.decision.drop[index]}
+                for index in sorted(self.decision.drop)
+            ],
+            "unassigned_failures": [asdict(result) for result in self.blockers],
+            "error": self.error,
+        }
 
 
 def parse_episode_list(spec: str) -> set[int]:
@@ -63,27 +101,33 @@ def collect_drops(
                     ep["episode_index"],
                     f"length {ep.get('length', 0)} < min-length {min_length}",
                 )
-    if dedupe:
-        # duplicate episodes are detected by value: drop every later member of
-        # each identical group, keep the first (digests come from the shared
-        # snapshot cache — zero re-conversion even right after a check run)
-        seen: dict[str, int] = {}
-        for idx in sorted(snap.frames):
-            h = snap.trajectory_digest(idx)
-            if h is None:
-                continue
-            if h in seen:
-                _drop(idx, f"duplicate of episode {seen[h]}")
-            else:
-                seen[h] = idx
+    duplicate_status = None
     if from_check is not None:
         trigger = {Status.FAIL} | ({Status.WARN} if drop_warn else set())
         for r in from_check:
             if r.status not in trigger:
                 continue
+            if r.name == "duplicate_episodes" and r.details.get("episodes"):
+                duplicate_status = r.status
+                continue
             for idx in r.details.get("episodes") or []:
                 if type(idx) is int and idx in decision.keep:
                     _drop(idx, f"{r.name} ({r.status.value})")
+    if dedupe or duplicate_status is not None:
+        # Keep the first eligible member after the other rules. Keeping the
+        # original group's first member could remove every valid copy.
+        seen: dict[str, int] = {}
+        for idx in sorted((decision.keep & snap.frames.keys()) - decision.drop.keys()):
+            digest = snap.trajectory_digest(idx)
+            if digest is None:
+                continue
+            if digest not in seen:
+                seen[digest] = idx
+                continue
+            if dedupe:
+                _drop(idx, f"duplicate of episode {seen[digest]}")
+            if duplicate_status is not None:
+                _drop(idx, f"duplicate_episodes ({duplicate_status.value})")
     decision.keep -= set(decision.drop)
     return decision
 

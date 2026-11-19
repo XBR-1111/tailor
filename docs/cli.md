@@ -67,6 +67,7 @@ Remote metadata-only runs skip file checks. Local inputs and remote runs with
 ```bash
 tailor filter PATH [-o OUT] [--drop-episodes 3,17,23] [--min-length N]
                    [--dedupe] [--from-check [--drop-warn]] [-p PROFILE]
+                   [--dry-run [--json]]
 ```
 
 | flag | effect |
@@ -78,12 +79,16 @@ tailor filter PATH [-o OUT] [--drop-episodes 3,17,23] [--min-length N]
 | `--from-check` | run the suite first and drop episodes that FAIL checks pin to an episode |
 | `--drop-warn` | with `--from-check`: WARN-pinned episodes too |
 | `-p, --profile` | acceptance profile for `--from-check` and for the output recheck |
+| `--dry-run` | show the episode plan before writing the output |
+| `--json` | emit the dry-run plan as JSON, including the full keep and drop lists and unassigned failures |
 
 Rewrites via lerobot's official `delete_episodes` engine, so parquet, videos,
 stats and metadata are rebuilt consistently. The output is re-checked
 automatically and the verdict printed. Every drop is printed with its reason.
 The command exits **1** if the acceptance verdict is rejected or the rules
 select every episode for removal. An unknown explicit episode index exits **2**.
+Dry-run exits **1** for a plan that would remove every episode or has no drops
+and a rejected source. An applicable plan still needs to pass the output recheck.
 Requires `pip install 'lerobot-tailor[lerobot]'`; v3.0 datasets only.
 
 ## clean

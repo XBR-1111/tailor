@@ -362,7 +362,9 @@ def _write_stats(out: Path, corrupt: str | None) -> None:
     # the checker recomputes over all frames together
     per_col: dict[str, list] = {}
     for f in files:
-        df = pd.read_parquet(f)
+        # Fixture files are tiny. Synchronous reads avoid Arrow's background
+        # prefetch workers racing interpreter shutdown in short-lived CI jobs.
+        df = pd.read_parquet(f, engine="pyarrow", use_threads=False, pre_buffer=False)
         for col in ("observation.state", "action"):
             if col in df.columns:  # schema-drop corrupts by removing a column
                 per_col.setdefault(col, []).extend(np.asarray(v, dtype=float) for v in df[col])

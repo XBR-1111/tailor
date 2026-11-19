@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from tailor.loader import load_snapshot
 
 # stats drift beyond this relative change is reported (mean/std are the
@@ -158,14 +160,25 @@ def _diff_stats(old: dict, new: dict, out: DiffReport) -> None:
             continue
         for stat in ("mean", "std"):
             om, nm = os_[col].get(stat), ns_[col].get(stat)
-            if not om or not nm or len(om) != len(nm):
-                if om != nm:
+            if om is None or nm is None:
+                if om is not nm:
                     out.stats_changed.append(f"{col}.{stat}: shape changed")
                 continue
-            for i, (a, b) in enumerate(zip(om, nm, strict=True)):
+            try:
+                old_values = np.asarray(om, dtype=float)
+                new_values = np.asarray(nm, dtype=float)
+            except (TypeError, ValueError):
+                out.stats_changed.append(f"{col}.{stat}: invalid numeric array")
+                continue
+            if old_values.shape != new_values.shape:
+                out.stats_changed.append(f"{col}.{stat}: shape changed")
+                continue
+            for index in np.ndindex(old_values.shape):
+                a, b = float(old_values[index]), float(new_values[index])
                 scale = max(abs(a), 1e-9)
                 if abs(b - a) / scale > STATS_DRIFT_TOL:
-                    out.stats_changed.append(f"{col}.{stat}[{i}]: {a:.4g} → {b:.4g}")
+                    coordinates = ",".join(str(i) for i in index)
+                    out.stats_changed.append(f"{col}.{stat}[{coordinates}]: {a:.4g} → {b:.4g}")
 
 
 def diff_datasets(old_root: Path, new_root: Path) -> DiffReport:

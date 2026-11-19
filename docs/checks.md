@@ -57,15 +57,12 @@ exist. Gate for anyone who trains and evaluates from one artifact.
 
 ## Data columns (parquet)
 
-**`episode_files`** — every data shard the metadata points at exists on disk,
-and (v3) pointer self-consistency holds the other way too: a shard on disk
-that no episode references is data nobody will ever read. The orphan scan is
-metadata-only and catches the class of pointer errors that existence checks
-and frame counts both miss — when the wrongly-pointed file is big enough, the
-unitreeh1-style defect (real frames sitting in an unreferenced `file-001`)
-sails through everything else. v2: one parquet per episode; v3: shared shards
-via `data/chunk_index` + `data/file_index`. Reproduce: `--corrupt missing-file`,
-`--corrupt orphan-shard`.
+**`episode_files`** checks that all referenced Parquet files exist and that
+files loaded for the selected episodes are readable. For v3, each selected
+episode must have rows in its declared shard (`data/chunk_index` and
+`data/file_index`), and every shard on disk must have a reference. Remote
+metadata-only runs skip these checks. Reproduce with `--corrupt missing-file`,
+`--corrupt unreadable-parquet`, or `--corrupt orphan-shard`.
 
 **`state_action_dims`** — vector dims of `observation.state` / `action`
 match the declared feature shapes.
@@ -127,9 +124,9 @@ only where a metadata signal can't answer the question.
 
 **`video_files`** — every declared video stream exists on disk. v2: one file
 per episode; v3: shard pointers (`videos/<key>/chunk_index` + `file_index`),
-plus the reverse direction: orphan video shards nobody references FAIL, and
-episode timestamp spans on one shard must not overlap (one video span cannot
-belong to two episodes). Gaps inside a shared shard only WARN — deleting
+plus the reverse direction: orphan video shards nobody references FAIL.
+Episode timestamp spans must be finite, non-negative, ordered, and disjoint
+within each shard. Gaps inside a shared shard only WARN — deleting
 episodes legally leaves unreferenced spans. Reproduce: `--corrupt orphan-shard`.
 Reproduce: `--corrupt missing-video`.
 
@@ -138,10 +135,13 @@ Reproduce: `--corrupt missing-video`.
 | sub-check | catches | reproduce |
 | --- | --- | --- |
 | decodability | file opens, stream present | truncate the file by hand |
-| frame count | decoded `nb_frames` vs episode length (± `frame_tolerance`) | `--corrupt video-mismatch` (short by 5) |
+| frame count | frame count matches the episode length in v2; v3 requires at least as many frames as the referenced episodes need (within `frame_tolerance`) because a shard may retain deleted footage | `--corrupt video-mismatch` (short by 5) |
 | resolution | stream size vs declared feature shape | re-encode at another resolution |
 | container fps | stream rate vs declared fps (± `fps_rel_tol`) | `--corrupt video-fps` (5 vs declared 10) |
 | duration | header duration vs decodable content (± `duration_tol`) — truncated recordings | truncate by hand |
+
+For v3, the episode span must start before the end of the referenced stream.
+Its end can exceed the stream duration by at most `frame_tolerance` frames.
 
 Rotation metadata and interlaced streams are also flagged: rotated drones or
 sideways-mounted cameras produce datasets that train but never converge on.
@@ -165,7 +165,8 @@ per GB — enable with `video_content: {enabled: true}`). Five defect classes:
 | blur | \|Laplacian\| p99 below `blur_p99` for ≥`blur_cover` of the segment — a working camera sees something sharp at some point; only a broken or dirty lens is edge-free throughout. Variance-based per-span detection was abandoned after a real wrist camera produced 404 false positives (a close-up against a plain surface is legitimately flat) |
 
 v3 shards are decoded once; each episode is judged on its metadata timestamp
-segment. Reproduce: `--corrupt video-freeze` (12 repeated frames mid-episode).
+segment. Segments that select no decoded frames fail. Reproduce:
+`--corrupt video-freeze` (12 repeated frames mid-episode).
 
 **`video_sync`** — v3 metadata: per-camera `from_timestamp`/`to_timestamp`
 for one episode agree within `tolerance` seconds. v2.x has no per-camera

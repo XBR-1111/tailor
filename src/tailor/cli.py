@@ -81,7 +81,9 @@ def check(
     from tailor.profile import ProfileError, load_profile
     from tailor.source import resolve_input
 
+    # A successful input resolution without a local path is a Hub snapshot.
     try:
+        metadata_only = not full and not path.exists()
         root = resolve_input(str(path), full=full)
     except (FileNotFoundError, NotADirectoryError) as e:
         console.print(f"[red]{e}[/red]")
@@ -101,7 +103,9 @@ def check(
     if sample not in ("first", "last"):
         console.print(f"[red]--sample must be 'first' or 'last', got {sample!r}[/red]")
         raise typer.Exit(code=2)
-    snap = load_snapshot(root, max_episodes=max_episodes, sample=sample)
+    snap = load_snapshot(
+        root, max_episodes=max_episodes, sample=sample, metadata_only=metadata_only
+    )
     if not snap.readable:
         console.print(
             "[red]dataset unreadable:[/red] missing meta/info.json or meta/episodes.jsonl"
@@ -205,6 +209,9 @@ def filter_(
     )
     console.print(render_decision(decision, len(snap.episodes or [])))
     if not decision.n_drop:
+        if results and any(r.status == Status.FAIL for r in results):
+            render_terminal(results, str(path))
+            raise typer.Exit(code=1)
         console.print("[green]nothing to drop — dataset unchanged[/green]")
         raise typer.Exit(code=0)
 
@@ -231,7 +238,7 @@ def filter_(
     from tailor.ledger import append_event, event_for_filter
 
     append_event(out, event_for_filter(path, snap, decision.drop, out))
-    raise typer.Exit(code=0)
+    raise typer.Exit(code=int(any(r.status == Status.FAIL for r in recheck)))
 
 
 @app.command()
@@ -254,22 +261,33 @@ def clean(
         console.print("[red]dataset unreadable[/red]")
         raise typer.Exit(code=2)
     from tailor.cleaning import apply_clean, recompute_stats
+    from tailor.expectations import check_episode_files
 
     do_stats, do_ts = not no_stats, not no_timestamps
     if not (do_stats or do_ts):
         console.print("[red]nothing to do:[/red] both repairs disabled")
+        raise typer.Exit(code=2)
+    data_files = check_episode_files(snap)
+    if data_files.status == Status.FAIL:
+        err_console.print(f"[red]cannot clean dataset:[/red] {data_files.message}")
         raise typer.Exit(code=2)
 
     if not apply:
         fps = float((snap.info or {}).get("fps", 0))
         from tailor.cleaning import detect_timestamp_changes
 
-        files, rows = detect_timestamp_changes(snap, fps) if (do_ts and fps > 0) else ([], 0)
+        files, rows = (
+            detect_timestamp_changes(snap, fps) if do_ts and 0 < fps < float("inf") else ([], 0)
+        )
         stats = snap.root / "meta" / "stats.json"
         drift = None
         stats_missing = do_stats and not stats.is_file()
         if do_stats and stats.is_file():
-            fresh = recompute_stats(snap)
+            try:
+                fresh = recompute_stats(snap, timestamp_files=files, fps=fps)
+            except ValueError as e:
+                err_console.print(f"[red]cannot recompute stats:[/red] {e}")
+                raise typer.Exit(code=2) from e
             old = json.loads(stats.read_text())
             import numpy as np
 
@@ -277,7 +295,11 @@ def clean(
             diffs = []
             for c in cols:
                 for stat in ("mean", "std"):
+                    if stat not in old[c] or stat not in fresh[c]:
+                        continue
                     a, b = np.asarray(old[c][stat], float), np.asarray(fresh[c][stat], float)
+                    if a.shape != b.shape or not a.size:
+                        continue
                     scale = np.maximum(np.abs(a), 1e-9)
                     d = float((np.abs(a - b) / scale).max())
                     # 0.1% is float round-trip noise, not drift. Note this is
@@ -316,7 +338,11 @@ def clean(
                 console.print("  timestamps: [green]already consistent[/green]")
         raise typer.Exit(code=0)
 
-    report = apply_clean(snap, stats=do_stats, timestamps=do_ts)
+    try:
+        report = apply_clean(snap, stats=do_stats, timestamps=do_ts)
+    except ValueError as e:
+        err_console.print(f"[red]cannot clean dataset:[/red] {e}")
+        raise typer.Exit(code=2) from e
     from tailor.ledger import append_event, event_for_clean
 
     ev = event_for_clean(report.stats_rewritten, len(report.timestamp_files), report.timestamp_rows)
@@ -335,7 +361,7 @@ def clean(
     new_snap = load_snapshot(path)
     recheck = run_all(new_snap)
     render_terminal(recheck, str(path))
-    raise typer.Exit(code=0)
+    raise typer.Exit(code=int(any(r.status == Status.FAIL for r in recheck)))
 
 
 @app.command()
@@ -368,7 +394,7 @@ def diff(
             raise typer.Exit(code=2)
     report = diff_datasets(old, new)
     if json_out:
-        console.print(json.dumps(dataclasses.asdict(report), indent=2, ensure_ascii=False))
+        typer.echo(json.dumps(dataclasses.asdict(report), indent=2, ensure_ascii=False))
     else:
         from rich.markdown import Markdown
 

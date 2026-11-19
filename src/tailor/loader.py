@@ -10,7 +10,6 @@ frames -> {episode_index: DataFrame}. Expectations never branch on version.
 
 import json
 import logging
-from functools import lru_cache
 from pathlib import Path
 from typing import cast
 
@@ -24,7 +23,11 @@ SUPPORTED_VERSIONS = ("v2.0", "v2.1", "v3.0")
 
 
 def load_snapshot(
-    root: Path, max_episodes: int | None = None, sample: str = "first"
+    root: Path,
+    max_episodes: int | None = None,
+    sample: str = "first",
+    *,
+    metadata_only: bool = False,
 ) -> DatasetSnapshot:
     """Read metadata and sample per-episode frames for a LeRobot dataset.
 
@@ -35,17 +38,17 @@ def load_snapshot(
     """
     if sample not in ("first", "last"):
         raise ValueError(f"sample must be 'first' or 'last', got {sample!r}")
-    snap = DatasetSnapshot(root=root)
+    snap = DatasetSnapshot(root=root, metadata_only=metadata_only)
     meta = root / "meta"
 
     info_path = meta / "info.json"
     if info_path.is_file():
         try:
-            snap.info = json.loads(info_path.read_text())
-        except json.JSONDecodeError:
-            snap.info = None
-    else:
-        snap.info = None
+            info = json.loads(info_path.read_text())
+            if isinstance(info, dict):
+                snap.info = info
+        except (OSError, ValueError):
+            pass
 
     version = (snap.info or {}).get("codebase_version")
     if version == "v3.0":
@@ -55,7 +58,7 @@ def load_snapshot(
         snap.episodes = _read_jsonl(meta / "episodes.jsonl")
         snap.tasks = _read_jsonl(meta / "tasks.jsonl")
 
-    if snap.episodes:
+    if snap.episodes and not metadata_only:
         if max_episodes is None:
             episodes = snap.episodes
         elif sample == "last":
@@ -63,21 +66,7 @@ def load_snapshot(
         else:
             episodes = snap.episodes[:max_episodes]
         if version == "v3.0":
-            # v3 frames live in shared chunk files; group once per file.
-            # v0.1 reads whole chunk files — fine at this scale; slicing via
-            # dataset_from_index is the follow-up for huge datasets.
-            seen = {ep.get("episode_index") for ep in episodes}
-            for f in sorted((root / "data").glob("chunk-*/file-*.parquet")):
-                try:
-                    df = pd.read_parquet(f)
-                except Exception:
-                    continue
-                for raw_idx, g in df.groupby("episode_index"):
-                    # groupby keys are typed as a wide pandas union; by
-                    # construction episode_index is an integer column
-                    idx = int(cast("int", raw_idx))
-                    if idx in seen and idx not in snap.frames:
-                        snap.frames[idx] = g
+            _load_v3_frames(snap, episodes)
         else:
             # v2: one parquet per episode — reading them in parallel pays off
             # from a few dozen episodes up (pyarrow releases the GIL on read)
@@ -91,10 +80,14 @@ def load_snapshot(
                     wanted.append(int(raw))
             workers = min(4, os.cpu_count() or 1)
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                frames = pool.map(lambda i: (i, _read_v2_episode_frames(str(root), i)), wanted)
+                frames = pool.map(lambda i: (i, _read_v2_episode_frames(root, i)), wanted)
                 for idx, ep_df in frames:
                     if ep_df is not None:
                         snap.frames[idx] = ep_df
+                    else:
+                        path = _episode_parquet_path(root, idx)
+                        if path.is_file():
+                            snap.frame_errors[str(path.relative_to(root))] = "unreadable Parquet"
     return snap
 
 
@@ -161,15 +154,52 @@ def _episode_parquet_path(root: Path, episode_index: int) -> Path:
     return root / "data" / f"chunk-{chunk:03d}" / f"episode_{episode_index:06d}.parquet"
 
 
-@lru_cache(maxsize=128)
-def _read_v2_episode_frames(root_str: str, episode_index: int | None) -> pd.DataFrame | None:
+def _read_v2_episode_frames(root: Path, episode_index: int) -> pd.DataFrame | None:
     """Read one v2 episode parquet; None means unreadable (corrupt or missing)."""
-    if episode_index is None:
-        return None
-    path = _episode_parquet_path(Path(root_str), episode_index)
-    if not path.is_file():
-        return None
     try:
-        return pd.read_parquet(path)
+        return pd.read_parquet(_episode_parquet_path(root, episode_index))
     except Exception:
         return None
+
+
+def _v3_episode_shard(root: Path, episode: dict) -> Path | None:
+    chunk, file = episode.get("data/chunk_index"), episode.get("data/file_index")
+    if not isinstance(chunk, int) or not isinstance(file, int):
+        return None
+    return root / "data" / f"chunk-{chunk:03d}" / f"file-{file:03d}.parquet"
+
+
+def _load_v3_frames(snap: DatasetSnapshot, episodes: list[dict]) -> None:
+    # LeRobot resolves each episode's declared shard. Looking for its rows in
+    # other shards would hide a bad pointer from acceptance.
+    wanted_by_shard: dict[Path, set[int]] = {}
+    for ep in episodes:
+        path = _v3_episode_shard(snap.root, ep)
+        idx = ep.get("episode_index")
+        if path is not None and isinstance(idx, int):
+            wanted_by_shard.setdefault(path, set()).add(idx)
+    for path, wanted in sorted(wanted_by_shard.items()):
+        if not path.is_file():
+            continue  # the file-existence check names missing shards
+        relative = str(path.relative_to(snap.root))
+        try:
+            df = pd.read_parquet(path)
+        except Exception:
+            snap.frame_errors[relative] = "unreadable Parquet"
+            continue
+        if "episode_index" not in df.columns:
+            snap.frame_errors[relative] = "episode_index column missing"
+            continue
+        if not pd.api.types.is_integer_dtype(df["episode_index"]):
+            snap.frame_errors[relative] = "episode_index column must contain integers"
+            continue
+        found = set()
+        for key, rows in df.groupby("episode_index"):
+            if key in wanted:
+                idx = int(cast("int", key))
+                snap.frames[idx] = rows
+                found.add(idx)
+        if missing := sorted(wanted - found):
+            snap.frame_errors[relative] = (
+                f"missing rows for {len(missing)} declared episode(s): {missing[:10]}"
+            )

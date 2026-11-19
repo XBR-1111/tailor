@@ -1,5 +1,6 @@
 """Tests for the version-diff command and the datasheet generator."""
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -42,8 +43,6 @@ def test_diff_detects_episode_length_change(tmp_path: Path) -> None:
 def test_diff_detects_feature_change(tmp_path: Path) -> None:
     """A feature dropped from the info.json declaration (data-level drops are
     schema_consistency's job — diff only sees the metadata layer)."""
-    import json
-
     a = make_fixture(tmp_path / "a")
     b = make_fixture(tmp_path / "b")
     info_path = b / "meta" / "info.json"
@@ -61,6 +60,26 @@ def test_diff_detects_structural_change(tmp_path: Path) -> None:
     b = make_fixture(tmp_path / "b", "bad-version")
     report = diff_datasets(a, b)
     assert any("codebase_version" in line for line in report.structural)
+
+
+def test_diff_compares_nested_camera_stats(tmp_path: Path) -> None:
+    old = make_fixture(tmp_path / "old", fmt="v3.0")
+    new = make_fixture(tmp_path / "new", fmt="v3.0")
+    camera = "observation.images.top"
+    stats = {camera: {"mean": [[[0.1]], [[0.2]], [[0.3]]], "std": [[[0.01]], [[0.02]], [[0.03]]]}}
+    old_stats = old / "meta" / "stats.json"
+    new_stats = new / "meta" / "stats.json"
+    old_stats.write_text(json.dumps(stats))
+    new_stats.write_text(json.dumps(stats))
+    assert not diff_datasets(old, new).has_differences()
+
+    stats[camera]["mean"][1][0][0] = 0.3
+    stats[camera]["std"] = [0.01, 0.02, 0.03]
+    new_stats.write_text(json.dumps(stats))
+    assert diff_datasets(old, new).stats_changed == [
+        f"{camera}.mean[1,0,0]: 0.2 → 0.3",
+        f"{camera}.std: shape changed",
+    ]
 
 
 def test_datasheet_has_all_sections(tmp_path: Path) -> None:
@@ -83,3 +102,15 @@ def test_diff_cli_exit_codes(tmp_path: Path) -> None:
     assert same.returncode == 0
     differs = subprocess.run([sys.executable, "-m", "tailor.cli", "diff", str(a), str(b_diff)])
     assert differs.returncode == 1
+
+
+def test_diff_cli_json_preserves_long_paths_with_brackets(tmp_path: Path) -> None:
+    dataset = make_fixture(tmp_path / ("name[red]" * 10))
+    result = subprocess.run(
+        [sys.executable, "-m", "tailor.cli", "diff", str(dataset), str(dataset), "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    report = json.loads(result.stdout)
+    assert report["old_root"] == report["new_root"] == str(dataset)

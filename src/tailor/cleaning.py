@@ -7,12 +7,18 @@ portability checks stay clean.
 """
 
 import json
+import re
 import shutil
+from collections.abc import Iterator, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from tailor.model import DatasetSnapshot
 from tailor.stats import RunningStats
@@ -46,38 +52,126 @@ def _data_files(snap: DatasetSnapshot) -> list[Path]:
     return sorted(data.glob("chunk-*/*.parquet")) if data.is_dir() else []
 
 
-def recompute_stats(snap: DatasetSnapshot) -> dict:
-    """Fresh stats over every numeric parquet column; video keys preserved
-    from the previous stats.json (pixel stats need full decode — out of scope).
+def recompute_stats(
+    snap: DatasetSnapshot, *, timestamp_files: Sequence[Path] = (), fps: float = 0.0
+) -> dict:
+    """Recompute numerical statistics and any existing LeRobot quantiles.
 
-    One file is in memory at a time; per-file results fold into RunningStats
-    (Chan et al. merge), so peak memory is O(one file) instead of O(dataset).
+    Retain statistics for features this repair does not process. When both
+    repairs are requested, compute from the timestamps that will be written.
     """
-    old = {}
     p = _stats_path(snap)
-    if p.is_file():
-        old = json.loads(p.read_text())
-    video_keys = [
-        k for k, f in (snap.info or {}).get("features", {}).items() if f.get("dtype") == "video"
-    ]
-    out: dict = {k: old[k] for k in video_keys if k in old}
-    running: dict[str, RunningStats] = {}
-    for f in _data_files(snap):
-        df = pd.read_parquet(f)
-        for col in _NUMERIC_COLS:
-            if col not in df.columns or len(df) == 0:
+    out = json.loads(p.read_text()) if p.is_file() else {}
+    if not isinstance(out, dict):
+        raise ValueError(f"expected an object in {p}")
+    files = _data_files(snap)
+    to_repair = set(timestamp_files)
+
+    def _columns(columns: Sequence[str]) -> Iterator[tuple[str, np.ndarray]]:
+        for path in files:
+            df = pd.read_parquet(path)
+            if df.empty:
                 continue
-            arr = np.stack([np.asarray(v, dtype=float) for v in df[col]])
-            running.setdefault(col, RunningStats()).update(arr)
+            for col in columns:
+                if col not in df.columns:
+                    continue
+                if col == "timestamp" and path in to_repair:
+                    arr, _ = _timestamp_values(df, fps)
+                else:
+                    arr = np.stack([np.asarray(v, dtype=float) for v in df[col]])
+                if not np.isfinite(arr).all():
+                    raise ValueError(f"cannot recompute {col!r}: non-finite values in {path}")
+                yield col, arr.reshape(len(arr), -1)
+
+    running: dict[str, RunningStats] = {}
+    quantile_fields: dict[str, list[str]] = {}
+    exact_quantiles: dict[str, dict] = {}
+    for col, arr in _columns(_NUMERIC_COLS):
+        running.setdefault(col, RunningStats()).update(arr)
+        previous = out.get(col, {})
+        if col not in quantile_fields:
+            quantile_fields[col] = (
+                [k for k in previous if re.fullmatch(r"q(?:[0-9]{2}|100)", k)]
+                if isinstance(previous, dict)
+                else []
+            )
+        fields = quantile_fields[col]
+        if fields and len(files) == 1:
+            values = np.quantile(arr, [int(k[1:]) / 100 for k in fields], axis=0)
+            exact_quantiles[col] = dict(zip(fields, values.tolist(), strict=True))
+
+    # One shard can be evaluated exactly. Across shards, use a fixed-size
+    # histogram per dimension instead of materializing the full dataset.
+    histograms = {
+        col: _QuantileHistogram(running[col].min, running[col].max)
+        for col, fields in quantile_fields.items()
+        if fields and col not in exact_quantiles
+    }
+    if histograms:
+        for col, arr in _columns(list(histograms)):
+            histograms[col].update(arr)
+
     for col, r in running.items():
+        quantiles = exact_quantiles.get(col, {})
+        if col in histograms:
+            quantiles = histograms[col].quantiles(quantile_fields[col])
         out[col] = {
             "min": r.min.tolist(),
             "max": r.max.tolist(),
             "mean": r.mean.tolist(),
             "std": r.std.tolist(),
-            "count": [int(c) for c in r.count],
+            "count": [int(r.count[0])],
+            **quantiles,
         }
     return out
+
+
+class _QuantileHistogram:
+    """Approximate cross-shard quantiles within observed per-bin bounds."""
+
+    _BINS = 5000
+
+    def __init__(self, lo: np.ndarray, hi: np.ndarray) -> None:
+        self._lo = lo
+        self._span = np.where(hi > lo, hi - lo, 1.0)
+        shape = (len(lo), self._BINS)
+        self._counts = np.zeros(shape, dtype=np.int64)
+        self._minima = np.full(shape, np.inf)
+        self._maxima = np.full(shape, -np.inf)
+
+    def update(self, arr: np.ndarray) -> None:
+        for dim, values in enumerate(arr.T):
+            pos = (values - self._lo[dim]) / self._span[dim]
+            bins = np.clip((pos * self._BINS).astype(int), 0, self._BINS - 1)
+            np.add.at(self._counts[dim], bins, 1)
+            np.minimum.at(self._minima[dim], bins, values)
+            np.maximum.at(self._maxima[dim], bins, values)
+
+    def quantiles(self, keys: list[str]) -> dict[str, list[float]]:
+        result: dict[str, list[float]] = {k: [] for k in keys}
+        probabilities = np.array([int(k[1:]) / 100 for k in keys])
+        for counts, minima, maxima in zip(self._counts, self._minima, self._maxima, strict=True):
+            cumulative = counts.cumsum()
+            ranks = (cumulative[-1] - 1) * probabilities
+            indices = np.stack([np.floor(ranks), np.ceil(ranks)]).astype(int)
+            bins = np.searchsorted(cumulative, indices, side="right")
+            offset = indices - (cumulative[bins] - counts[bins])
+            share = offset / np.maximum(1, counts[bins] - 1)
+            low, high = minima[bins], maxima[bins]
+            values = low + (high - low) * share
+            estimates = values[0] + (values[1] - values[0]) * (ranks - indices[0])
+            for key, estimate in zip(keys, estimates, strict=True):
+                result[key].append(float(estimate))
+        return result
+
+
+def _timestamp_values(df: pd.DataFrame, fps: float) -> tuple[np.ndarray, np.ndarray]:
+    old = df["timestamp"].to_numpy()
+    expected = df["frame_index"].to_numpy(dtype=float) / fps
+    if old.dtype.kind == "f":
+        expected = expected.astype(old.dtype)
+    changed = np.isfinite(expected) & ~np.isclose(old, expected, rtol=0, atol=1e-6)
+    return np.where(changed, expected, old), changed
 
 
 def detect_timestamp_changes(snap: DatasetSnapshot, fps: float) -> tuple[list[Path], int]:
@@ -92,8 +186,7 @@ def detect_timestamp_changes(snap: DatasetSnapshot, fps: float) -> tuple[list[Pa
         df = pd.read_parquet(f)
         if "frame_index" not in df.columns or "timestamp" not in df.columns:
             continue
-        new_ts = df["frame_index"].astype(float) / fps
-        diff = (df["timestamp"].astype(float) - new_ts).abs() > 1e-6
+        _, diff = _timestamp_values(df, fps)
         if not diff.any():
             continue
         changed_files.append(f)
@@ -101,33 +194,44 @@ def detect_timestamp_changes(snap: DatasetSnapshot, fps: float) -> tuple[list[Pa
     return changed_files, changed_rows
 
 
-def _rewrite_timestamps(snap: DatasetSnapshot, fps: float, files: list[Path]) -> None:
-    """Write frame_index/fps timestamps into the given files (already detected).
+@contextmanager
+def _replacement_file(path: Path) -> Iterator[Path]:
+    """Write and close the replacement before publishing it at the original path."""
+    with NamedTemporaryFile(dir=path.parent, delete=False) as tmp:
+        replacement = Path(tmp.name)
+    try:
+        yield replacement
+        if path.is_file():
+            shutil.copymode(path, replacement)
+        replacement.replace(path)
+    finally:
+        replacement.unlink(missing_ok=True)
 
-    Callers must back the files up BEFORE this — after the write the on-disk
-    original is gone.
-    """
+
+def _stage_timestamps(fps: float, files: list[Path], pending: ExitStack) -> None:
+    """Prepare corrected files for publication when the transaction stack closes."""
     for f in files:
-        df = pd.read_parquet(f)
-        df["timestamp"] = df["frame_index"].astype(float) / fps
-        df.to_parquet(f, index=False)
-    if files:
-        # loader caches v2 episode frames; the rewrite must invalidate it or
-        # same-process re-checks would judge stale data
-        from tailor.loader import _read_v2_episode_frames
-
-        _read_v2_episode_frames.cache_clear()
+        table = pq.read_table(f)
+        fixed, _ = _timestamp_values(table.select(["frame_index", "timestamp"]).to_pandas(), fps)
+        index = table.schema.get_field_index("timestamp")
+        timestamp = table.schema.field(index)
+        if not pa.types.is_floating(timestamp.type):
+            timestamp = timestamp.with_type(pa.float64())
+        table = table.set_column(index, timestamp, pa.array(fixed, type=timestamp.type))
+        replacement = pending.enter_context(_replacement_file(f))
+        pq.write_table(table, replacement)
 
 
 def rebuild_timestamps(snap: DatasetSnapshot, fps: float) -> tuple[list[Path], int]:
     """Detect + write in one call. Only for callers that own the backup step.
 
-    apply_clean does backup-then-write via detect + _rewrite_timestamps; this
+    apply_clean does backup-then-write via detect + _stage_timestamps; this
     convenience wrapper exists for programmatic use where detection and the
     write happen in the same breath.
     """
     files, rows = detect_timestamp_changes(snap, fps)
-    _rewrite_timestamps(snap, fps, files)
+    with ExitStack() as pending:
+        _stage_timestamps(fps, files, pending)
     return files, rows
 
 
@@ -136,7 +240,16 @@ def apply_clean(snap: DatasetSnapshot, *, stats: bool, timestamps: bool) -> Clea
     report = CleanReport()
     if not (stats or timestamps):
         return report
-    backup = snap.root.parent / f"{snap.root.name}_pre_clean"
+    fps = float((snap.info or {}).get("fps", 0)) if timestamps else 0.0
+    files, rows = detect_timestamp_changes(snap, fps) if 0 < fps < np.inf else ([], 0)
+    stats_path = _stats_path(snap)
+    serialized = None
+    if stats:
+        fresh = recompute_stats(snap, timestamp_files=files, fps=fps)
+        serialized = json.dumps(fresh, indent=2, allow_nan=False).encode()
+
+    root = snap.root.resolve()
+    backup = root.parent / f"{root.name}_pre_clean"
     backup.mkdir(parents=True, exist_ok=True)
     report.backup_dir = backup
 
@@ -145,23 +258,21 @@ def apply_clean(snap: DatasetSnapshot, *, stats: bool, timestamps: bool) -> Clea
         dst = backup / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         if not dst.exists():
-            shutil.copy2(p, dst)
+            with _replacement_file(dst) as replacement:
+                shutil.copy2(p, replacement)
 
-    if stats:
-        p = _stats_path(snap)
-        if p.is_file():
-            _backup(p)  # a missing stats.json has no original to back up
-        p.write_text(json.dumps(recompute_stats(snap), indent=2))
-        report.stats_rewritten = True
-    if timestamps:
-        fps = float((snap.info or {}).get("fps", 0))
-        if fps > 0:
-            # detect first, back up the ORIGINALS, then write — writing before
-            # the backup would archive the already-rewritten data
-            files, rows = detect_timestamp_changes(snap, fps)
-            for f in files:
-                _backup(f)
-            _rewrite_timestamps(snap, fps, files)
-            report.timestamp_files = files
-            report.timestamp_rows = rows
+    if serialized is not None and stats_path.is_file():
+        _backup(stats_path)
+    for path in files:
+        _backup(path)
+    # Prepare every output before replacing any originals. ExitStack publishes
+    # in reverse order, so stats become visible only after all timestamps do.
+    with ExitStack() as pending:
+        if serialized is not None:
+            replacement = pending.enter_context(_replacement_file(stats_path))
+            replacement.write_bytes(serialized)
+        _stage_timestamps(fps, files, pending)
+    report.stats_rewritten = serialized is not None
+    report.timestamp_files = files
+    report.timestamp_rows = rows
     return report

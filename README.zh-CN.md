@@ -53,8 +53,9 @@ tailor check lerobot/... --full               # 下载全部，跑满 25 条检�
 ACCEPTED  ·  11 passed, 0 warn, 0 failed  ·  11 skipped (meta-only run)
 ```
 
-远程模式默认只拉 `meta/*`（几 MB、数秒）跑所有元数据级检查——依赖数据文件的
-检查会诚实 SKIP，不假报 FAIL。下载缓存在 `~/.cache/tailor-hf/`。
+远程模式默认只下载 `meta/*`（几 MB），跳过依赖数据和视频文件的检查。检查本地数据集
+或用 `--full` 检查远程数据集时，必需文件缺失、抽查到的 Parquet 无法读取都会导致拒收。
+下载缓存在 `~/.cache/tailor-hf/`。
 
 退出码让它可以直接当 CI 门禁用：**0** 收货 · **1** 拒收 · **2** 不可读（`--fail-on-warn`
 让 WARN 也以 1 退出）。`--json` 输出机器可读结果；`--markdown report.md` 写出可贴
@@ -84,10 +85,9 @@ tailor filter /data/ds --dedupe                # 逐字节相同的轨迹，保�
 
 ## Clean——确定性修复
 
-`tailor clean` 修确定性能修的：`meta/stats.json` 按 parquet 数据重算（video
-条目保留），timestamp 按 `frame_index / fps` 重建。默认 dry-run；`--apply`
-才写盘，每个被替换的文件备份到数据集外的 `<dataset>_pre_clean/`，完成后自动
-re-check 并打印 verdict。零 lerobot 依赖。
+`tailor clean` 按 `frame_index / fps` 修复时间戳，再用修复后的 Parquet 值重算
+`meta/stats.json`，并保留视频等未处理特征的统计。默认预览修复。`--apply` 会先把被
+替换的文件备份到数据集外的 `<dataset>_pre_clean/`，修复后自动复检。拒收时退出码为 `1`。
 
 ```bash
 tailor clean /data/ds            # dry-run：只报告会改什么，不写盘

@@ -3,7 +3,7 @@
 Usage:
     PYTHONPATH=src:scripts python scripts/bench.py --episodes 300 --frames 500
 
-Times load_snapshot and run_all separately (cold caches each round) so the
+Times load_snapshot and run_all separately so the
 loader and the checks can be tracked independently. Fixtures persist under
 /tmp between runs (delete to regenerate). Deterministic; wall-clock.
 """
@@ -29,7 +29,7 @@ def main() -> None:
     import make_fixture
 
     from tailor.expectations import run_all
-    from tailor.loader import _read_v2_episode_frames, load_snapshot
+    from tailor.loader import load_snapshot
 
     make_fixture.set_scale(args.episodes, args.frames)
 
@@ -45,7 +45,6 @@ def main() -> None:
 
         load_times, check_times = [], []
         for _ in range(args.repeat):
-            _read_v2_episode_frames.cache_clear()  # cold loader cache each round
             t0 = time.perf_counter()
             snap = load_snapshot(root)
             t1 = time.perf_counter()

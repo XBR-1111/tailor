@@ -14,11 +14,11 @@ import re
 from collections.abc import Callable
 from itertools import pairwise
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 
-from tailor.loader import SUPPORTED_VERSIONS, _episode_parquet_path
+from tailor.loader import SUPPORTED_VERSIONS, _episode_parquet_path, _v3_episode_shard
 from tailor.model import CheckResult, DatasetSnapshot, Status
 
 if TYPE_CHECKING:
@@ -111,23 +111,32 @@ def check_episodes_metadata(snap: DatasetSnapshot, cfg: dict | None = None) -> C
 
 def check_episode_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
+    if snap.metadata_only:
+        return _skip("episode_files", "metadata-only run; use --full to check Parquet files")
     if not (snap.root / "data").is_dir():
-        return _skip("episode_files", "data/ not on disk (meta-only run? use --full)")
+        return _fail("episode_files", "data/ directory missing")
     if snap.episodes is None:
         return _skip("episode_files", "episode metadata unreadable")
+    if snap.frame_errors:
+        errors = list(snap.frame_errors.items())
+        path, reason = errors[0]
+        return _fail(
+            "episode_files",
+            f"{len(errors)} invalid data file(s); {path}: {reason}",
+            problems=dict(errors[:20]),
+        )
     version = (snap.info or {}).get("codebase_version")
     if version == "v3.0":
         # v3 stores episodes back-to-back in chunk/file shards; episode meta
         # carries the shard pointer, so existence is checked per shard.
-        referenced: set[tuple[int, int]] = set()
+        referenced: set[Path] = set()
         missing_shards = set()
         for ep in snap.episodes:
-            c, f = ep.get("data/chunk_index"), ep.get("data/file_index")
-            if not isinstance(c, int) or not isinstance(f, int):
+            shard = _v3_episode_shard(snap.root, ep)
+            if shard is None:
                 missing_shards.add("unresolved shard pointer")
                 continue
-            referenced.add((c, f))
-            shard = snap.root / "data" / f"chunk-{c:03d}" / f"file-{f:03d}.parquet"
+            referenced.add(shard)
             if not shard.is_file():
                 missing_shards.add(str(shard.relative_to(snap.root)))
         if missing_shards:
@@ -136,22 +145,11 @@ def check_episode_files(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
                 f"{len(missing_shards)} data shard(s) missing",
                 missing=sorted(missing_shards)[:20],
             )
-        # pointer self-consistency, the other half of existence: a shard on
-        # disk that no episode references is data nobody will ever read. The
-        # real unitreeh1 case (README) — all cam_left pointers aimed at
-        # file-000 while 500 frames sat in an unreferenced file-001 — sails
-        # through existence alone when the wrongly-pointed file happens to be
-        # big enough; the orphan scan catches it in one move, metadata-only.
-        orphans: list[str] = []
-        for shard in sorted((snap.root / "data").glob("chunk-*/file-*.parquet")):
-            try:
-                c = int(shard.parent.name.removeprefix("chunk-"))
-                f = int(shard.stem.removeprefix("file-"))
-            except ValueError:
-                orphans.append(str(shard.relative_to(snap.root)) + " (unparsable name)")
-                continue
-            if (c, f) not in referenced:
-                orphans.append(str(shard.relative_to(snap.root)))
+        orphans = [
+            str(shard.relative_to(snap.root))
+            for shard in sorted((snap.root / "data").glob("chunk-*/file-*.parquet"))
+            if shard not in referenced
+        ]
         if orphans:
             return _fail(
                 "episode_files",
@@ -327,6 +325,7 @@ def check_nan_inf(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult
             "nan_inf",
             "non-finite values found in numeric feature columns",
             bad=bad[:10],
+            episodes=sorted({idx for idx, _, _ in bad}),
         )
     return _ok("nan_inf")
 
@@ -348,6 +347,9 @@ def check_timestamps(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRes
             problems.append((idx, "timestamp column missing"))
             continue
         ts = np.asarray(df["timestamp"], dtype=float)
+        if not np.isfinite(ts).all():
+            problems.append((idx, "non-finite timestamps"))
+            continue
         if ts.size < 2:
             continue
         diffs = np.diff(ts)
@@ -518,6 +520,22 @@ def _video_keys(info: dict) -> list[str]:
     return [key for key, feat in info.get("features", {}).items() if feat.get("dtype") == "video"]
 
 
+def _video_span(ep: dict, key: str) -> tuple[float, float] | None:
+    start = ep.get(f"videos/{key}/from_timestamp")
+    end = ep.get(f"videos/{key}/to_timestamp")
+    if (
+        isinstance(start, (int, float))
+        and not isinstance(start, bool)
+        and isinstance(end, (int, float))
+        and not isinstance(end, bool)
+        and math.isfinite(start)
+        and math.isfinite(end)
+        and 0 <= start < end
+    ):
+        return float(start), float(end)
+    return None
+
+
 def _stream_fps(stream: "av.VideoStream") -> float | None:
     """Container-declared fps, preferring average_rate over codec framerate."""
     rate = getattr(stream, "average_rate", None) or stream.codec_context.framerate
@@ -584,14 +602,15 @@ def _duration_gap_ratio(frames: int, fps: float | None, duration_s: float | None
 
 
 def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
-    cfg = cfg or {}
-    if not (snap.root / "videos").is_dir():
-        return _skip("video_files", "videos/ not on disk (meta-only run? use --full)")
+    if snap.metadata_only:
+        return _skip("video_files", "metadata-only run (use --full)")
     if snap.info is None or snap.episodes is None:
         return _skip("video_files", "info.json or episode metadata unreadable")
     keys = _video_keys(snap.info)
     if not keys:
         return _ok("video_files", "no video streams declared")
+    if not (snap.root / "videos").is_dir():
+        return _fail("video_files", "videos/ missing for declared video streams")
     version = (snap.info or {}).get("codebase_version")
     missing = set()
     for ep in snap.episodes:
@@ -628,6 +647,7 @@ def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
         # deletions legally leave unreferenced spans inside a shared file.
         referenced: dict[str, set[tuple[int, int]]] = {key: set() for key in keys}
         spans: dict[tuple[str, int, int], list[tuple[float, float]]] = {}
+        problems: list[str] = []
         for ep in snap.episodes:
             for key in keys:
                 c = ep.get(f"videos/{key}/chunk_index")
@@ -635,11 +655,14 @@ def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
                 if not isinstance(c, int) or not isinstance(f, int):
                     continue
                 referenced[key].add((c, f))
-                a = ep.get(f"videos/{key}/from_timestamp")
-                b = ep.get(f"videos/{key}/to_timestamp")
-                if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-                    spans.setdefault((key, c, f), []).append((float(a), float(b)))
-        problems: list[str] = []
+                span = _video_span(ep, key)
+                if span is None:
+                    problems.append(
+                        f"{key} ep {ep.get('episode_index')}: invalid video timestamps "
+                        "(expected finite 0 <= from_timestamp < to_timestamp)"
+                    )
+                else:
+                    spans.setdefault((key, c, f), []).append(span)
         for key in keys:
             vdir = snap.root / "videos" / key
             if not vdir.is_dir():
@@ -683,29 +706,32 @@ def check_video_files(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
     return _ok("video_files", f"{len(keys)} stream(s)")
 
 
-def _video_probe_jobs(snap: DatasetSnapshot, keys: list[str]) -> list[tuple[str, str, Path, int]]:
-    """(key, label, path, expected_frames) for every declared video file on disk.
+def _video_probe_jobs(
+    snap: DatasetSnapshot, keys: list[str]
+) -> list[tuple[str, str, Path, int, list[dict]]]:
+    """(key, label, path, expected_frames, v3_episodes) for each present video file.
 
     Shared by the stream probe and the head/tail decode: v3 episodes share
     shards, so expected frames are summed per shard; v2 cuts one file per
     episode. Missing files are skipped — video_files already reports them.
     """
     version = (snap.info or {}).get("codebase_version")
-    jobs: list[tuple[str, str, Path, int]] = []
+    jobs: list[tuple[str, str, Path, int, list[dict]]] = []
     if snap.episodes is None:
         return jobs
     for key in keys:
         if version == "v3.0":
-            shards: dict[tuple, list] = {}
+            shards: dict[tuple[int, int], list[dict]] = {}
             for ep in snap.episodes:
                 c, f = ep.get(f"videos/{key}/chunk_index"), ep.get(f"videos/{key}/file_index")
                 if isinstance(c, int) and isinstance(f, int):
-                    shards.setdefault((c, f), []).append(ep.get("length", 0))
-            for (c, f), lengths in shards.items():
+                    shards.setdefault((c, f), []).append(ep)
+            for (c, f), episodes in shards.items():
                 path = snap.root / "videos" / key / f"chunk-{c:03d}" / f"file-{f:03d}.mp4"
                 if not path.is_file():
                     continue
-                jobs.append((key, path.name, path, sum(lengths)))
+                expected = sum(ep.get("length", 0) for ep in episodes)
+                jobs.append((key, path.name, path, expected, episodes))
         else:
             for ep in snap.episodes:
                 idx = ep.get("episode_index", -1)
@@ -718,14 +744,16 @@ def _video_probe_jobs(snap: DatasetSnapshot, keys: list[str]) -> list[tuple[str,
                 )
                 if not path.is_file():
                     continue
-                jobs.append((key, f"ep {idx}", path, ep.get("length", 0)))
+                jobs.append((key, f"ep {idx}", path, ep.get("length", 0), []))
     return jobs
 
 
 def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckResult:
     cfg = cfg or {}
+    if snap.metadata_only:
+        return _skip("video_streams", "metadata-only run (use --full)")
     if not (snap.root / "videos").is_dir():
-        return _skip("video_streams", "videos/ not on disk (meta-only run? use --full)")
+        return _skip("video_streams", "videos/ not on disk")
     if snap.info is None or snap.episodes is None:
         return _skip("video_streams", "info.json or episode metadata unreadable")
     keys = _video_keys(snap.info)
@@ -770,14 +798,29 @@ def check_video_streams(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
         probed = list(pool.map(lambda j: _safe_probe(_probe, j[2]), jobs))
     fps_rel_tol = cfg.get("fps_rel_tol", 0.05)
     duration_tol = cfg.get("duration_tol", 0.02)
-    for (key, label, _path, expected), result in zip(jobs, probed, strict=True):
+    for (key, label, _path, expected, episodes), result in zip(jobs, probed, strict=True):
         shape = snap.info["features"][key].get("shape", [])
         if isinstance(result, Exception):
             problems.append(f"{key}: {label} video undecodable")
             continue
         frames, w, h, fps, duration, interlaced, rotation = result
-        if abs(frames - expected) > tolerance:
+        # v3 shards can retain the frames of deleted episodes, so a surplus is legal.
+        if frames + tolerance < expected or (not episodes and frames - expected > tolerance):
             problems.append(f"{key} {label}: {frames} frames vs {expected} episode frames")
+        timeline_end = duration if duration and duration > 0 else (frames / fps if fps else None)
+        if timeline_end is not None:
+            # LeRobot timestamps are relative to the beginning of the video file.
+            # Allow the configured number of missing boundary frames without
+            # treating a span starting at or beyond the end as decodable.
+            slack = (tolerance / fps if fps else 0.0) + 1e-6
+            for ep in episodes:
+                span = _video_span(ep, key)
+                if span is not None and (span[0] >= timeline_end or span[1] > timeline_end + slack):
+                    problems.append(
+                        f"{key} {label} ep {ep.get('episode_index')}: "
+                        f"video span [{span[0]:g}, {span[1]:g})s outside "
+                        f"stream duration {timeline_end:g}s"
+                    )
         if len(shape) >= 2 and (h, w) != (shape[0], shape[1]):
             problems.append(f"{key} {label}: {w}x{h} vs declared {shape[1]}x{shape[0]}")
         # declared fps (info.json features) vs container fps: a silent unit
@@ -861,8 +904,10 @@ def check_video_black(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
     80% of that value.
     """
     cfg = cfg or {}
+    if snap.metadata_only:
+        return _skip("video_black", "metadata-only run (use --full)")
     if not (snap.root / "videos").is_dir():
-        return _skip("video_black", "videos/ not on disk (meta-only run? use --full)")
+        return _skip("video_black", "videos/ not on disk")
     if snap.info is None or snap.episodes is None:
         return _skip("video_black", "info.json or episode metadata unreadable")
     keys = _video_keys(snap.info)
@@ -878,7 +923,7 @@ def check_video_black(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRe
     dark_share = float(cfg.get("dark_share", 0.9))
     jobs = _video_probe_jobs(snap, keys)
     problems: list[str] = []
-    for key, label, path, _expected in jobs:
+    for key, label, path, _expected, _episodes in jobs:
         result = _safe_probe(lambda p: _decode_edge_frames(p, head, tail, None), path)
         if isinstance(result, Exception):
             problems.append(f"{key}: {label} undecodable")
@@ -1084,24 +1129,12 @@ def _video_segments(
                     continue
                 c = ep.get(f"videos/{key}/chunk_index")
                 f = ep.get(f"videos/{key}/file_index")
-                t0, t1 = (
-                    ep.get(f"videos/{key}/from_timestamp"),
-                    ep.get(f"videos/{key}/to_timestamp"),
-                )
-                if not all(isinstance(v, (int, float)) for v in (c, f, t0, t1)):
+                if not isinstance(c, int) or not isinstance(f, int):
                     continue
-                ci, fi = cast(int, c), cast(int, f)
-                path = snap.root / "videos" / key / f"chunk-{ci:03d}" / f"file-{fi:03d}.mp4"
+                path = snap.root / "videos" / key / f"chunk-{c:03d}" / f"file-{f:03d}.mp4"
                 if path.is_file():
-                    out.append(
-                        (
-                            key,
-                            f"{path.name} ep {ep.get('episode_index')}",
-                            path,
-                            cast(float, t0),
-                            cast(float, t1),
-                        )
-                    )
+                    start, end = _video_span(ep, key) or (None, None)
+                    out.append((key, f"{path.name} ep {ep.get('episode_index')}", path, start, end))
         else:
             for ep in snap.episodes:
                 if ep_indices is not None and ep.get("episode_index") not in ep_indices:
@@ -1125,6 +1158,8 @@ def check_video_content(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     opt in (any config entry for this check enables it), because a full
     decode is minutes per GB, not the seconds a gate can afford.
     """
+    if snap.metadata_only:
+        return _skip("video_content", "metadata-only run (use --full)")
     if not cfg:
         return _skip("video_content", "full-decode check; enable via a profile entry")
     if not (snap.root / "videos").is_dir():
@@ -1143,20 +1178,27 @@ def check_video_content(snap: DatasetSnapshot, cfg: dict | None = None) -> Check
     # blur floor makes per-camera baselines unnecessary (see _content_problems)
     ep_indices = set(snap.frames) if snap.frames else None
     segs = _video_segments(snap, keys, ep_indices)
-    decoded: dict[Path, dict | None] = {}
+    if not segs:
+        return _skip("video_content", "no present video segments to decode")
+    decoded: dict[Path, dict | Exception | None] = {}
     for _key, _label, path, _a, _b in segs:
         if path not in decoded:
-            decoded[path] = _decode_content_measures(path)
+            decoded[path] = _safe_probe(_decode_content_measures, path)
     problems: list[str] = []
+    is_v3 = snap.info.get("codebase_version") == "v3.0"
     for key, label, path, a, b in segs:
         m = decoded.get(path)
-        if m is None:
+        if m is None or isinstance(m, Exception) or not m["t"]:
             problems.append(f"{key}: {label} undecodable")
             continue
-        if a is not None and b is not None:
+        if is_v3:
+            if a is None or b is None:
+                problems.append(f"{key} {label}: invalid video timestamps")
+                continue
             tt = np.asarray(m["t"], dtype=float)
             mask = (tt >= a - 1e-6) & (tt < b - 1e-6)
             if not mask.any():
+                problems.append(f"{key} {label}: no decoded frames in [{a:g}, {b:g})s")
                 continue
             lt = np.asarray(m["lap_t"], dtype=float)
             lmask = (lt >= a - 1e-6) & (lt < b - 1e-6)
@@ -1370,16 +1412,18 @@ def check_index_column(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckR
                 )
             # v3.0 only: rows must also sit inside the declared global window
             f_from, f_to = ep.get("dataset_from_index"), ep.get("dataset_to_index")
-            if f_from is not None and f_to is not None and (
-                expected.min() < f_from or expected.max() >= f_to
+            if (
+                f_from is not None
+                and f_to is not None
+                and (expected.min() < f_from or expected.max() >= f_to)
             ):
-                    problems.append(
-                        (
-                            idx,
-                            f"expected range [{int(expected.min())},{int(expected.max())}] outside "
-                            f"declared [{f_from},{f_to})",
-                        )
+                problems.append(
+                    (
+                        idx,
+                        f"expected range [{int(expected.min())},{int(expected.max())}] outside "
+                        f"declared [{f_from},{f_to})",
                     )
+                )
         offset += ln
     if problems:
         return _fail(
@@ -1539,12 +1583,11 @@ def check_video_sync(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRes
         idx = ep.get("episode_index")
         spans = {}
         for key in keys:
-            t0 = ep.get(f"videos/{key}/from_timestamp")
-            t1 = ep.get(f"videos/{key}/to_timestamp")
-            if t0 is None or t1 is None:
-                problems.append((idx, key, "missing camera timestamps"))
+            span = _video_span(ep, key)
+            if span is None:
+                problems.append((idx, key, "missing or invalid camera timestamps"))
                 continue
-            spans[key] = (float(t0), float(t1))
+            spans[key] = span
         if len(spans) < 2:
             continue
         starts = [v[0] for v in spans.values()]
@@ -1556,7 +1599,7 @@ def check_video_sync(snap: DatasetSnapshot, cfg: dict | None = None) -> CheckRes
         episodes = sorted({p[0] for p in problems if isinstance(p[0], int)})
         return _warn(
             "video_sync",
-            f"{len(problems)} episode(s) with cross-camera time drift > {tolerance:.3f}s",
+            f"{len(episodes)} episode(s) with missing, invalid, or misaligned camera timestamps",
             problems=problems[:10],
             episodes=episodes,
         )

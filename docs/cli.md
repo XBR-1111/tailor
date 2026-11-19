@@ -59,8 +59,8 @@ it never counts against the verdict. Note that `verdict` follows FAILs only;
 `--json` does not change that, and `--fail-on-warn` affects the exit code,
 not the payload.
 
-SKIP reasons name their cause, so a metadata-only remote run reports
-`videos/ not on disk (meta-only run? use --full)` instead of faking a FAIL.
+Remote metadata-only runs skip file checks. Local inputs and remote runs with
+`--full` fail when required data or video files are missing.
 
 ## filter
 
@@ -82,6 +82,7 @@ tailor filter PATH [-o OUT] [--drop-episodes 3,17,23] [--min-length N]
 Rewrites via lerobot's official `delete_episodes` engine, so parquet, videos,
 stats and metadata are rebuilt consistently. The output is re-checked
 automatically and the verdict printed. Every drop is printed with its reason.
+The command exits **1** if the acceptance verdict is rejected.
 Requires `pip install 'lerobot-tailor[lerobot]'`; v3.0 datasets only.
 
 ## clean
@@ -93,8 +94,10 @@ tailor clean PATH [--apply] [--no-stats] [--no-timestamps]
 Dry-run by default: prints what would change, writes nothing. `--apply`
 writes, backing up every replaced file to `<dataset>_pre_clean/` outside the
 dataset root, then re-checks and prints the verdict. Repairs are deterministic
-only: `meta/stats.json` recomputed from parquet (video entries preserved),
-timestamps rebuilt as `frame_index / fps`. No lerobot dependency.
+and rebuild timestamps as `frame_index / fps`. When stats recomputation is
+enabled, it uses the repaired timestamps and preserves entries for features it
+does not process. The command exits **1** if the re-check rejects the dataset.
+No lerobot dependency.
 
 ## provenance
 

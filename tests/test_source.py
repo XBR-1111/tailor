@@ -3,6 +3,8 @@
 No network: the download path is monkeypatched, zip cases use real fixtures.
 """
 
+import json
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -72,21 +74,40 @@ def test_remote_dispatch_calls_downloader(tmp_path: Path, monkeypatch: pytest.Mo
     assert out == tmp_path / "lerobot__some_dataset"
 
 
-def test_meta_only_run_skips_file_checks(tmp_path: Path) -> None:
-    # meta-only remote pre-check must SKIP file-presence checks, not fake-FAIL
-    from tailor.expectations import run_all
-    from tailor.loader import load_snapshot
-    from tailor.model import Status
+def test_only_remote_precheck_skips_missing_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
 
-    ds = make_fixture(tmp_path / "src2")
-    import shutil as _sh
+    from tailor import source
+    from tailor.cli import app
 
-    _sh.rmtree(ds / "data")
-    _sh.rmtree(ds / "videos")
-    st = {r.name: r.status for r in run_all(load_snapshot(ds))}
-    assert st["episode_files"] == Status.SKIP
-    assert st["video_files"] == Status.SKIP
-    assert st["video_streams"] == Status.SKIP
+    ds = make_fixture(tmp_path / "dataset")
+    monkeypatch.setattr(source, "download_repo", lambda *args, **kwargs: ds)
+    runner = CliRunner()
+
+    # A cached full download must not change the scope of a remote pre-check.
+    remote = "lerobot/metadata_only_test@v2.1"
+    result = runner.invoke(app, ["check", remote, "--json"])
+    assert result.exit_code == 0
+    status = {r["name"]: r["status"] for r in json.loads(result.stdout)["checks"]}
+    for check in (
+        "episode_files",
+        "video_files",
+        "video_streams",
+        "video_black",
+        "frame_continuity",
+    ):
+        assert status[check] == "SKIP"
+
+    shutil.rmtree(ds / "data")
+    shutil.rmtree(ds / "videos")
+    for args in ([str(ds)], [remote, "--full"]):
+        result = runner.invoke(app, ["check", *args, "--json"])
+        assert result.exit_code == 1, result.output
+        status = {r["name"]: r["status"] for r in json.loads(result.stdout)["checks"]}
+        assert status["episode_files"] == "FAIL"
+        assert status["video_files"] == "FAIL"
 
 
 def test_repo_ref_syntax_splits() -> None:

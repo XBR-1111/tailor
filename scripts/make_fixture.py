@@ -30,6 +30,7 @@ def set_scale(episodes: int, frames: int) -> None:
 CORRUPTIONS = (
     "nan",  # NaN in observation.state of episode 1
     "missing-file",  # delete episode 1's parquet (v2) / the data shard (v3)
+    "unreadable-parquet",  # leave a present but truncated parquet file
     "frame-mismatch",  # info total_frames off by 7
     "bad-version",  # codebase_version set to v9.9
     "short-episode",  # episode 2 declared length set to 1
@@ -444,6 +445,8 @@ def main() -> None:
         shutil.rmtree(args.out)
     maker = make_v2 if args.format == "v2.1" else make_v3
     maker(args.out, args.corrupt)
+    if args.corrupt == "unreadable-parquet":
+        sorted((args.out / "data").rglob("*.parquet"))[0].write_bytes(b"incomplete Parquet")
     tag = f" (format={args.format}" + (f", corrupt={args.corrupt})" if args.corrupt else ")")
     print(f"fixture written: {args.out}{tag}")
 

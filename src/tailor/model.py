@@ -46,6 +46,8 @@ class DatasetSnapshot:
     _col_cache: dict[tuple[int, str], np.ndarray | None] = field(
         default_factory=dict, repr=False, compare=False
     )
+    metadata_only: bool = False
+    frame_errors: dict[str, str] = field(default_factory=dict)
 
     @property
     def readable(self) -> bool:

@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from tailor.expectations import run_all
@@ -57,6 +58,51 @@ def test_nan_is_caught(tmp_path: Path) -> None:
 def test_missing_file_is_caught(tmp_path: Path) -> None:
     st = statuses(make_fixture(tmp_path, "missing-file"))
     assert st["episode_files"] == Status.FAIL
+
+
+@pytest.mark.parametrize("fmt", ["v2.1", "v3.0"])
+def test_corrupt_parquet_is_rejected_after_a_successful_check(tmp_path: Path, fmt: str) -> None:
+    from typer.testing import CliRunner
+
+    from tailor.cli import app
+
+    ds = make_fixture(tmp_path, fmt=fmt)
+    runner = CliRunner()
+    check = ["check", str(ds), "--json"]
+    assert runner.invoke(app, check).exit_code == 0
+
+    bad = make_fixture(tmp_path, "unreadable-parquet", fmt=fmt)
+    parquet = sorted((ds / "data").rglob("*.parquet"))[0]
+    relative = parquet.relative_to(ds)
+    parquet.write_bytes((bad / relative).read_bytes())
+    result = runner.invoke(app, check)
+    assert result.exit_code == 1, result.output
+    assert '"verdict": "rejected"' in result.stdout
+    assert str(relative) in result.stdout
+    assert "unreadable Parquet" in result.stdout
+
+
+def test_v3_episode_must_live_in_its_declared_shard(tmp_path: Path) -> None:
+    ds = make_fixture(tmp_path, fmt="v3.0")
+    shard = ds / "data/chunk-000/file-000.parquet"
+    frames = pd.read_parquet(shard)
+    frames[frames["episode_index"] == 0].to_parquet(shard, index=False)
+    frames[frames["episode_index"] != 0].to_parquet(
+        shard.with_name("file-001.parquet"), index=False
+    )
+    metadata_path = ds / "meta/episodes/chunk-000/file-000.parquet"
+    episodes = pd.read_parquet(metadata_path)
+    episodes["data/file_index"] = (episodes["episode_index"] != 0).astype(int)
+    episodes.to_parquet(metadata_path, index=False)
+    assert statuses(ds)["episode_files"] == Status.PASS
+
+    episodes["data/file_index"] = 1 - episodes["data/file_index"]
+    episodes.to_parquet(metadata_path, index=False)
+    for limit in (None, 1):
+        snap = load_snapshot(ds, max_episodes=limit)
+        result = next(r for r in run_all(snap) if r.name == "episode_files")
+        assert result.status == Status.FAIL
+        assert "missing rows" in result.message
 
 
 def test_frame_mismatch_is_caught(tmp_path: Path) -> None:

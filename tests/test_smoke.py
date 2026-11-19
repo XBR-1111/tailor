@@ -95,3 +95,24 @@ def test_json_stdout_stays_pure_with_markdown(tmp_path: Path) -> None:
     data = _json.loads(r.stdout)  # plain loads, no raw_decode crutch
     assert data["verdict"] in ("accepted", "rejected")
     assert (tmp_path / "r.md").is_file()
+
+
+def test_clean_returns_failure_if_recheck_rejects_dataset(tmp_path: Path) -> None:
+    from test_expectations import make_fixture
+
+    ds = make_fixture(tmp_path, "nan", fmt="v3.0")
+    result = runner.invoke(app, ["clean", str(ds), "--apply", "--no-stats"])
+    assert result.exit_code == 1, result.output
+    assert "REJECTED" in result.stdout
+
+
+def test_clean_keeps_stats_when_a_required_shard_is_missing(tmp_path: Path) -> None:
+    from test_expectations import make_fixture
+
+    ds = make_fixture(tmp_path, "missing-file", fmt="v3.0")
+    stats = ds / "meta/stats.json"
+    before = stats.read_bytes()
+    result = runner.invoke(app, ["clean", str(ds), "--apply"])
+    assert result.exit_code == 2, result.output
+    assert "data shard(s) missing" in result.stderr
+    assert stats.read_bytes() == before

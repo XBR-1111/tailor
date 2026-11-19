@@ -59,6 +59,24 @@ def test_from_check_drop_warn(tmp_path: Path) -> None:
     assert collect_drops(snap, from_check=results, drop_warn=True).n_drop == 1
 
 
+def test_from_check_drops_episode_with_nonfinite_features(tmp_path: Path) -> None:
+    snap = load_snapshot(make_fixture(tmp_path, "nan", fmt="v3.0"))
+    decision = collect_drops(snap, from_check=run_all(snap))
+    assert decision.drop == {1: ["nan_inf (FAIL)"]}
+    assert decision.keep == {0, 2}
+
+
+def test_from_check_returns_failure_if_findings_cannot_be_filtered(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from tailor.cli import app
+
+    ds = make_fixture(tmp_path, "frame-mismatch", fmt="v3.0")
+    result = CliRunner().invoke(app, ["filter", str(ds), "--from-check"])
+    assert result.exit_code == 1, result.output
+    assert "REJECTED" in result.stdout
+
+
 def test_render_decision_lists_reasons(tmp_path: Path) -> None:
     snap = load_snapshot(make_fixture(tmp_path))
     d = collect_drops(snap, explicit={1})

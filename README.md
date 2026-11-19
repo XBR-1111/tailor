@@ -53,9 +53,10 @@ tailor check lerobot/... --full               # download everything, all 25 chec
 ACCEPTED  ·  11 passed, 0 warn, 0 failed  ·  11 skipped (meta-only run)
 ```
 
-Remote mode pulls only `meta/*` by default (seconds, a few MB) and runs every
-metadata-level check — file-presence checks SKIP honestly instead of faking a
-FAIL. Downloads cache under `~/.cache/tailor-hf/`.
+By default, remote mode downloads `meta/*` (a few MB) and skips checks that
+need data and video files. Local inputs and remote `--full` runs reject
+missing required files and unreadable Parquet for the selected episodes.
+Downloads cache under `~/.cache/tailor-hf/`.
 
 Exit codes make it a CI gate: **0** accepted · **1** rejected · **2** unreadable
 (`--fail-on-warn` makes WARN exit 1 too). `--json` emits machine-readable output,
@@ -91,11 +92,11 @@ reason — no silent removals.
 
 ## Clean — deterministic repairs
 
-`tailor clean` fixes what deterministic math can fix: `meta/stats.json`
-recomputed from the parquet data (video entries preserved), timestamps
-rebuilt as `frame_index / fps`. Dry-run by default; `--apply` writes, backing
-up every replaced file to `<dataset>_pre_clean/` outside the dataset root, then
-re-checks the dataset and prints the verdict. No lerobot dependency.
+`tailor clean` rebuilds timestamps as `frame_index / fps` and recomputes
+`meta/stats.json` from the resulting Parquet values. It preserves statistics
+for unprocessed features like video. By default it previews the repair.
+`--apply` backs up replaced files to `<dataset>_pre_clean/` outside the dataset
+root, applies the repair, then re-checks the dataset. A rejection exits `1`.
 
 ```bash
 tailor clean /data/ds            # dry-run: what would change, nothing written

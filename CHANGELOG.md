@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] — 2026-11-19
+
+### Added
+- `tailor run RECIPE` previews a versioned YAML recipe. With `--apply`, it
+  stages the filtered output, rechecks it, and publishes accepted datasets.
+  JSON reports include both verdicts and the full plan, and the ledger records
+  recipe, profile, and tool versions. See `examples/unitree.yaml`.
+
+### Changed
+- Hugging Face inputs use a commit-specific local cache so movable refs cannot
+  blend files from different revisions. Remote recipes require an exact SHA.
+- The reusable GitHub Actions workflow installs the matching Tailor release.
+
 ## [0.13.0] — 2026-11-19
 
 ### Added

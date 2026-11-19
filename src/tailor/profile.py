@@ -69,6 +69,11 @@ def load_profile(path: Path) -> dict:
         raw = yaml.safe_load(path.read_text()) or {}
     except yaml.YAMLError as e:
         raise ProfileError(f"invalid YAML: {e}") from e
+    return parse_profile(raw)
+
+
+def parse_profile(raw: object) -> dict:
+    """Validate an already parsed profile, including inline recipe checks."""
     if not isinstance(raw, dict) or "checks" not in raw:
         raise ProfileError("profile must be a mapping with a top-level 'checks' key")
     checks = raw["checks"]

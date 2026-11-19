@@ -3,6 +3,7 @@
 ```
 tailor check PATH        run the acceptance suite (read-only)
 tailor filter PATH       drop episodes, auto re-check the output
+tailor run RECIPE        preview or apply a versioned YAML recipe
 tailor clean PATH        deterministic repairs (dry-run by default)
 tailor provenance PATH   show the dataset's processing ledger
 tailor diff OLD NEW      compare two dataset versions
@@ -90,6 +91,42 @@ select every episode for removal. An unknown explicit episode index exits **2**.
 Dry-run exits **1** for a plan that would remove every episode or has no drops
 and a rejected source. An applicable plan still needs to pass the output recheck.
 Requires `pip install 'lerobot-tailor[lerobot]'`; v3.0 datasets only.
+
+## run
+
+```bash
+tailor run RECIPE [--apply] [--json]
+```
+
+`run` loads a version 1 YAML recipe and runs acceptance on a complete LeRobot
+v3.0 dataset. The default prints the episode plan. `--apply` writes to a
+staging directory, rechecks the result with the same rules, and publishes the
+dataset at `output` after acceptance. Rejected outputs are discarded. An
+existing output is an error. The optional LeRobot extra is needed for a rewrite
+that removes episodes. A clean source with no removals can be copied directly.
+
+Paths are relative to the YAML file. The `dataset` field accepts a local
+directory, a ZIP archive, or a Hugging Face dataset with an exact commit SHA.
+Remote recipes fetch the complete snapshot, including when previewing.
+Use either inline `checks` or `profile` with the path to a profile file.
+
+```yaml
+version: 1
+dataset: ./raw-dataset
+output: ./filtered-dataset
+checks:
+  episode_lengths: {min: 100, severity: fail}
+filter:
+  from_check: true
+  drop_warn: false
+  drop_episodes: []
+```
+
+`filter` also accepts `min_length` and `dedupe`. `--json` includes the plan,
+source and output checks, and hashes of the recipe and effective profile.
+The output ledger records those hashes, the source, and the planned removals.
+Exit **1** means the plan cannot be applied or the output failed recheck.
+An invalid recipe or an unavailable input exits **2**.
 
 ## clean
 

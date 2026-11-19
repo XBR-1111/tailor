@@ -5,6 +5,7 @@ unchanged. Remote mode pulls only ``meta/*`` by default (a fast pre-check
 against the metadata-level checks); ``--full`` snapshots the whole repo.
 """
 
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -55,17 +56,25 @@ def download_repo(
     format version on its own ref (v2.1 / v3.0 tags, main = latest), so
     checking an older format means checking that ref.
     """
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import HfApi, snapshot_download
 
+    # Resolve movable refs once and materialize each commit in its own local
+    # directory. Hub local_dir downloads overlay files, including deleted ones.
+    sha = revision if revision and re.fullmatch(r"[0-9a-f]{40}", revision) else None
+    if sha is None:
+        sha = HfApi().repo_info(repo_id, repo_type="dataset", revision=revision).sha
+    if not sha or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError(f"could not resolve a commit for {repo_id}")
     patterns = None if full else ["meta/*"]
+    checkout = dest / sha
     snapshot_download(
         repo_id=repo_id,
         repo_type="dataset",
-        revision=revision,
-        local_dir=str(dest),
+        revision=sha,
+        local_dir=str(checkout),
         allow_patterns=patterns,
     )
-    return dest
+    return checkout
 
 
 def resolve_input(value: str, download_dir: Path | None = None, full: bool = False) -> Path:

@@ -1,6 +1,8 @@
 """CLI entry point: `tailor check <path>` runs the acceptance suite."""
 
 import json
+import sys
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 
 import typer
@@ -176,7 +178,13 @@ def filter_(
             "(see --drop-episodes / --min-length / --dedupe / --from-check)"
         )
         raise typer.Exit(code=2)
-    from tailor.filtering import FilterPlan, collect_drops, parse_episode_list, render_decision
+    from tailor.filtering import (
+        FilterPlan,
+        collect_drops,
+        parse_episode_list,
+        render_decision,
+        rewrite_filtered_dataset,
+    )
 
     snap = load_snapshot(path)
     if not snap.readable:
@@ -236,18 +244,14 @@ def filter_(
         console.print("[green]nothing to drop — dataset unchanged[/green]")
         raise typer.Exit(code=0)
 
-    try:
-        from lerobot.datasets.dataset_tools import delete_episodes as _del
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    except ImportError:
-        err_console.print("[red]lerobot not installed:[/red] pip install 'lerobot-tailor[lerobot]'")
-        raise typer.Exit(code=2) from None
-
     if out.exists():
         console.print(f"[red]output exists:[/red] {out}")
         raise typer.Exit(code=2)
-    src = LeRobotDataset(path.name, root=str(path))
-    _del(src, sorted(decision.drop), output_dir=str(out))
+    try:
+        rewrite_filtered_dataset(path, out, decision)
+    except ImportError:
+        err_console.print("[red]lerobot not installed:[/red] pip install 'lerobot-tailor[lerobot]'")
+        raise typer.Exit(code=2) from None
     console.print(f"[green]wrote[/green] {out}")
 
     # Re-check stage: the product must pass acceptance again — under the SAME
@@ -259,6 +263,41 @@ def filter_(
 
     append_event(out, event_for_filter(path, snap, decision.drop, out))
     raise typer.Exit(code=int(any(r.status == Status.FAIL for r in recheck)))
+
+
+@app.command()
+def run(
+    recipe: Path = typer.Argument(..., help="Path to a versioned YAML recipe."),
+    apply: bool = typer.Option(False, "--apply", help="Write and recheck the recipe output."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the run report as JSON."),
+) -> None:
+    """Preview or apply a dataset recipe."""
+    from tailor.profile import ProfileError
+    from tailor.recipe import load_recipe, run_recipe
+
+    try:
+        with redirect_stdout(sys.stderr) if json_output else nullcontext():
+            result, code = run_recipe(load_recipe(recipe), apply=apply)
+    except (OSError, ValueError, ProfileError, ImportError) as exc:
+        typer.echo(f"recipe error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    if json_output:
+        typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        plan = result["plan"]
+        typer.echo(
+            f"{result['status'].upper()} · keep {len(plan['keep'])}, drop {len(plan['drop'])}"
+        )
+        for item in plan["drop"]:
+            typer.echo(f"  drop ep {item['episode_index']}: {', '.join(item['reasons'])}")
+        for item in result["output_checks"] or result["source_checks"]:
+            if item["status"] in (Status.FAIL, Status.WARN):
+                typer.echo(f"  {item['status']} {item['name']}: {item['message']}")
+        if result["error"]:
+            typer.echo(result["error"], err=True)
+        if result["status"] == "accepted":
+            typer.echo(f"output: {plan['output']}")
+    raise typer.Exit(code=code)
 
 
 @app.command()

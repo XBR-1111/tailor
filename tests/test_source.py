@@ -7,11 +7,41 @@ import json
 import shutil
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from tailor.source import looks_like_repo_id, resolve_input, unpack_zip
 from test_expectations import make_fixture
+
+
+def test_download_uses_separate_directories_when_a_ref_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import huggingface_hub
+
+    from tailor.source import download_repo
+
+    commits = iter(["a" * 40, "b" * 40])
+    monkeypatch.setattr(
+        huggingface_hub,
+        "HfApi",
+        lambda: SimpleNamespace(repo_info=lambda *a, **kw: SimpleNamespace(sha=next(commits))),
+    )
+
+    def snapshot(*, repo_id: str, revision: str, local_dir: str, **kwargs: object) -> str:
+        assert repo_id == "lerobot/example"
+        root = Path(local_dir)
+        root.mkdir()
+        if revision == "a" * 40:
+            (root / "removed.parquet").write_text("old revision only")
+        return str(root)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
+    old = download_repo("lerobot/example", tmp_path, full=True, revision="main")
+    new = download_repo("lerobot/example", tmp_path, full=True, revision="main")
+    assert old.name == "a" * 40 and new.name == "b" * 40
+    assert (old / "removed.parquet").exists() and not (new / "removed.parquet").exists()
 
 
 def test_repo_id_detection() -> None:

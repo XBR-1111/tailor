@@ -138,3 +138,12 @@ def render_decision(decision: DropDecision, total: int) -> str:
         reasons = "; ".join(decision.drop[idx])
         lines.append(f"  drop ep {idx}: {reasons}")
     return "\n".join(lines)
+
+
+def rewrite_filtered_dataset(source: Path, output: Path, decision: DropDecision) -> None:
+    """Use the optional LeRobot writer to apply a previously validated plan."""
+    from lerobot.datasets.dataset_tools import delete_episodes
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    dataset = LeRobotDataset(source.name, root=str(source))
+    delete_episodes(dataset, sorted(decision.drop), output_dir=str(output))

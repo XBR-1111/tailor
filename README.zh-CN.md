@@ -91,6 +91,18 @@ tailor filter /data/ds --dedupe                # 逐字节相同的轨迹，保�
 分片内，超出文件时长的区间可以定位到具体 episode。如果规则选中了全部 episode，
 命令会在写出结果前报错退出。
 
+## 用 YAML 复跑验收和筛选
+
+[Unitree 配方](examples/unitree.yaml)固定了公开数据集版本，验收和复验用同一套规则。
+首次运行会下载完整数据集。选择写盘前，可以先看每段的保留或剔除计划。
+
+```bash
+tailor run examples/unitree.yaml --json
+tailor run examples/unitree.yaml --apply --json
+```
+
+执行会剔除片段的配方时，安装 `lerobot-tailor[lerobot]`。参数与输出见[命令文档](docs/cli.md#run)。
+
 ## Clean——确定性修复
 
 `tailor clean` 按 `frame_index / fps` 修复时间戳，再用修复后的 Parquet 值重算
@@ -127,7 +139,7 @@ workflow，你的流水线一行就能对数据集设门禁：
 # your-repo/.github/workflows/dataset-quality.yml
 jobs:
   check-dataset:
-    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.10.0
+    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.14.0
     with:
       dataset: lerobot/unitreeh1_fold_clothes   # HF repo id、本地路径或 .zip
       fail-on-warn: false
@@ -231,6 +243,6 @@ v0.10.0：25 条验收检查（含视频纵深）、`filter` / `clean` / 血缘�
 - ~~`clean`~~ 已交付（见上）：stats 重算 + 时戳重建，先 dry-run
 - ~~血缘台账~~ 已交付（见上）：append-only，随数据集走
 - ~~`diff` / `datasheet`~~ 已交付（v0.10.0）：版本对比与交付单
-- YAML 配方（跟随上游 `recipe.py` 的方向，不自造 schema）
+- ~~YAML 配方~~ 已交付（v0.14.0）：固定输入版本、预览筛选计划、复验后写出
 
 生态参照：lerobot-doctor（诊断，已进官方 dataset visualizer）、Calibra（episode 处置建议）。tailor 的定位是**验收门禁 + 可执行的流水线**——verdict + 退出码当 CI 门，然后是带血缘的确定性精炼，不做又一份报告。

@@ -4,7 +4,7 @@ name: tailor check (reusable)
 #
 #   jobs:
 #     check-dataset:
-#       uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.10.0
+#       uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.14.0
 #       with:
 #         dataset: lerobot/unitreeh1_fold_clothes
 #
@@ -28,7 +28,7 @@ on:
         default: false
         type: boolean
       extra-args:
-        description: "Extra args passed to `tailor check` verbatim (e.g. '--profile my.yaml')"
+        description: "Shell-quoted arguments to `tailor check` (e.g. '--profile my.yaml')"
         required: false
         default: ""
         type: string
@@ -41,14 +41,28 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: pip install lerobot-tailor
+      - run: pip install lerobot-tailor==0.14.0
       - name: tailor check
+        env:
+          TAILOR_DATASET: ${{ inputs.dataset }}
+          TAILOR_FULL: ${{ inputs.full }}
+          TAILOR_FAIL_ON_WARN: ${{ inputs.fail-on-warn }}
+          TAILOR_EXTRA_ARGS: ${{ inputs.extra-args }}
         run: |
-          tailor check "${{ inputs.dataset }}" \
-            ${{ inputs.full && '--full' || '' }} \
-            ${{ inputs.fail-on-warn && '--fail-on-warn' || '' }} \
-            ${{ inputs.extra-args }} \
-            --markdown tailor-report.md
+          python - <<'PY'
+          import os
+          import shlex
+          import subprocess
+
+          args = ["tailor", "check"]
+          if os.environ["TAILOR_FULL"] == "true":
+              args.append("--full")
+          if os.environ["TAILOR_FAIL_ON_WARN"] == "true":
+              args.append("--fail-on-warn")
+          args.extend(shlex.split(os.environ["TAILOR_EXTRA_ARGS"]))
+          args.extend(["--markdown", "tailor-report.md", "--", os.environ["TAILOR_DATASET"]])
+          raise SystemExit(subprocess.call(args))
+          PY
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4

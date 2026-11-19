@@ -1,0 +1,10 @@
+version: 1
+dataset: lerobot/unitreeh1_fold_clothes@a0926b4dd672560fdc4e6c9d1e68cda17631d608
+output: unitree-filtered
+checks:
+  codebase_version: {allowed: [v3.0]}
+  fps: {allowed: [50]}
+  episode_lengths: {min: 100, severity: fail}
+filter:
+  from_check: true
+  drop_warn: false

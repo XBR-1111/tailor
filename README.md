@@ -99,6 +99,21 @@ report's examples. Video spans that exceed a shared shard identify specific
 episodes for removal. If the rules select every episode, the command exits
 with an error before writing an output.
 
+## Reproduce a run with YAML
+
+The [Unitree recipe](examples/unitree.yaml) pins the public dataset revision
+and uses the same checks for planning and rechecking. It downloads the full
+dataset on the first run. The episode plan is available before any output is
+written.
+
+```bash
+tailor run examples/unitree.yaml --json
+tailor run examples/unitree.yaml --apply --json
+```
+
+Install `lerobot-tailor[lerobot]` to apply a recipe that removes episodes.
+See the [recipe CLI reference](docs/cli.md#run).
+
 ## Clean — deterministic repairs
 
 `tailor clean` rebuilds timestamps as `frame_index / fps` and recomputes
@@ -149,7 +164,7 @@ this repo — one line gates a dataset in your pipeline:
 # your-repo/.github/workflows/dataset-quality.yml
 jobs:
   check-dataset:
-    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.10.0
+    uses: XBR-1111/tailor/.github/workflows/tailor-check.yml@v0.14.0
     with:
       dataset: lerobot/unitreeh1_fold_clothes   # HF repo id, local path, or .zip
       fail-on-warn: false
@@ -283,6 +298,6 @@ decode: frozen frames, covered lens, blur, mid-file black).
 - ~~`clean`~~ shipped (see above): stats recompute + timestamp rebuild, dry-run first
 - ~~provenance ledger~~ shipped (see above): append-only, travels with the dataset
 - ~~`diff` / `datasheet`~~ shipped (v0.10.0): version comparison and delivery documents
-- YAML recipes (tracking upstream `recipe.py` direction rather than inventing a schema)
+- ~~YAML recipes~~ shipped (v0.14.0): pinned input, plans and verified output
 
 Reference points: lerobot-doctor (diagnostics, now in the official dataset visualizer), Calibra (episode disposition decisions). tailor's lane is the acceptance gate plus the executed pipeline — verdict + exit code as a CI door, then deterministic refinement with provenance, not another report.
